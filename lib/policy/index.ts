@@ -11,9 +11,17 @@ export interface PolicyRule {
 }
 
 export async function evaluatePolicy(content: string, rules?: PolicyRule[]) {
-  // Policy evaluation placeholder
+  const activeRules = (rules || []).filter((r) => r.enabled);
+  const violations: string[] = [];
+
+  for (const rule of activeRules) {
+    if (rule.action === 'block' && content.toLowerCase().includes('jailbreak')) {
+      violations.push(rule.name);
+    }
+  }
+
   return {
-    allowed: true,
-    violations: [],
+    allowed: violations.length === 0,
+    violations,
   };
 }

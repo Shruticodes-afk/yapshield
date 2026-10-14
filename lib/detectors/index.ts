@@ -11,6 +11,17 @@ export interface DetectorResult {
 }
 
 export async function runDetectors(input: string): Promise<DetectorResult[]> {
-  // Detector pipeline implementation placeholder
-  return [];
+  const results: DetectorResult[] = [];
+
+  // Simple heuristic placeholder check
+  if (/ignore previous instructions/i.test(input)) {
+    results.push({
+      detected: true,
+      type: 'prompt_injection',
+      score: 0.95,
+      details: { match: 'ignore previous instructions' },
+    });
+  }
+
+  return results;
 }

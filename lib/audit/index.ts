@@ -15,8 +15,11 @@ export interface AuditEvent {
 export async function logAuditEvent(event: AuditEvent) {
   try {
     const supabase = getServiceSupabase();
-    // Audit log persistence placeholder (e.g. Supabase table 'audit_logs')
-    return { success: true };
+    const { error } = await supabase.from('audit_logs').insert([event]);
+    if (error) {
+      console.warn('Supabase audit log insert notice:', error.message);
+    }
+    return { success: !error };
   } catch (error) {
     console.error('Failed to record audit event:', error);
     return { success: false, error };

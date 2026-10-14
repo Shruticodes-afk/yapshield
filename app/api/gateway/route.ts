@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   return NextResponse.json({
     status: 'ok',
     service: 'YapShield Gateway API',
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
       data: body,
       processedAt: new Date().toISOString(),
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: 'Invalid JSON payload in request body' },
       { status: 400 }
