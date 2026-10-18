@@ -15,6 +15,12 @@ import { detectCreditCard } from './creditcard';
 import { detectAadhaar } from './aadhaar';
 import { detectPerson } from './person';
 import { detectKeywords } from './keywords';
+import {
+  detectApiKeys,
+  detectJwt,
+  detectPrivateKey,
+  detectHighEntropy,
+} from './secrets';
 
 // Re-export types and individual detectors for convenience
 export * from './types';
@@ -27,6 +33,7 @@ export * from './creditcard';
 export * from './aadhaar';
 export * from './person';
 export * from './keywords';
+export * from './secrets';
 
 /**
  * Priority ranking for entity types when resolving overlaps.
@@ -77,11 +84,15 @@ export function detectAll(text: string, options?: DetectAllOptions): Detection[]
   const rawDetections: Detection[] = [
     ...detectAadhaar(text),
     ...detectCreditCard(text),
+    ...detectApiKeys(text),
+    ...detectJwt(text),
+    ...detectPrivateKey(text),
     ...detectUpi(text),
     ...detectPan(text),
     ...detectIfsc(text),
     ...detectPhone(text),
     ...detectEmail(text),
+    ...detectHighEntropy(text),
     ...detectPerson(text),
   ];
 
