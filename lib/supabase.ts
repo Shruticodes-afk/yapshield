@@ -11,12 +11,21 @@ if (!supabaseUrl || !supabaseAnonKey) {
   }
 }
 
+const fallbackUrl = 'https://placeholder.supabase.co';
+const fallbackKey = 'placeholder';
+
 // Standard client for public / browser queries using anonymous key
-export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase: SupabaseClient = createClient(
+  supabaseUrl || fallbackUrl,
+  supabaseAnonKey || fallbackKey
+);
 
 // Factory function for standard client
 export const createSupabaseClient = (): SupabaseClient => {
-  return createClient(supabaseUrl, supabaseAnonKey);
+  return createClient(
+    supabaseUrl || fallbackUrl,
+    supabaseAnonKey || fallbackKey
+  );
 };
 
 // Server-only administrative Supabase client using Service Role key
