@@ -34,6 +34,7 @@ export * from './aadhaar';
 export * from './person';
 export * from './keywords';
 export * from './secrets';
+export * from './injection';
 
 /**
  * Priority ranking for entity types when resolving overlaps.
