@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { runGateway } from '@/lib/gateway';
 import { InMemoryVaultStore } from '@/lib/vault/store';
 import { InMemoryAuditStore, verifyChain } from '@/lib/audit';
@@ -390,5 +390,101 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
     const chainResult = await verifyChain(auditStore);
     expect(chainResult.valid).toBe(true);
     expect(chainResult.checked).toBe(allAuditRows.length);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. Fail-Closed Error Logging: Privacy & Stage Verification
+  // ---------------------------------------------------------------------------
+  it('logs non-sensitive LLM errors with stage label and error message', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const throwingLlm = async () => {
+      throw new Error('Connection reset by peer');
+    };
+
+    const res = await runGateway(
+      {
+        prompt: 'Testing non-sensitive error logging',
+        mode: 'send',
+      },
+      {
+        llm: throwingLlm,
+        vaultStore,
+        auditStore,
+      }
+    );
+
+    expect(res.status).toBe('error');
+    expect(res.message).toBe('Request blocked for safety');
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[gateway]',
+      'llm',
+      'Error: Connection reset by peer'
+    );
+
+    errorSpy.mockRestore();
+  });
+
+  it('redacts sensitive error messages containing API keys, prompts, tokens, and env vars', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // 1. Error containing an API key
+    const apiKeyLlm = async () => {
+      throw new Error('Failed with AIzaSy0123456789abcdef0123456789abcdef0');
+    };
+
+    const resKey = await runGateway(
+      { prompt: 'Testing secret leakage', mode: 'send' },
+      { llm: apiKeyLlm, vaultStore, auditStore }
+    );
+    expect(resKey.status).toBe('error');
+    expect(resKey.message).toBe('Request blocked for safety');
+    expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
+
+    // 2. Error containing raw prompt
+    const promptLlm = async () => {
+      throw new Error('Model rejected prompt: Secret confidential research');
+    };
+
+    const resPrompt = await runGateway(
+      { prompt: 'Secret confidential research', mode: 'send' },
+      { llm: promptLlm, vaultStore, auditStore }
+    );
+    expect(resPrompt.status).toBe('error');
+    expect(resPrompt.message).toBe('Request blocked for safety');
+    expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
+
+    // 3. Error containing token placeholder
+    const tokenThrowingStore = new InMemoryVaultStore();
+    tokenThrowingStore.save = async () => {
+      throw new Error('Failed to save token [PHONE_1]');
+    };
+
+    const resToken = await runGateway(
+      {
+        prompt: 'Contact 9876543210',
+        mode: 'send',
+        policyName: 'Developer',
+      },
+      { llm: async (p) => p, vaultStore: tokenThrowingStore, auditStore }
+    );
+    expect(resToken.status).toBe('error');
+    expect(resToken.message).toBe('Request blocked for safety');
+    expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'vault', 'Error');
+
+    // 4. Error containing environment variable name
+    const envLlm = async () => {
+      throw new Error('VAULT_SECRET is missing or invalid');
+    };
+
+    const resEnv = await runGateway(
+      { prompt: 'Checking env var redacting', mode: 'send' },
+      { llm: envLlm, vaultStore, auditStore }
+    );
+    expect(resEnv.status).toBe('error');
+    expect(resEnv.message).toBe('Request blocked for safety');
+    expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
+
+    errorSpy.mockRestore();
   });
 });

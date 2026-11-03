@@ -16,7 +16,7 @@ export function makeGeminiLlm(): (sanitizedPrompt: string) => Promise<string> {
     throw new Error('GEMINI_API_KEY is missing. Please configure GEMINI_API_KEY in environment.');
   }
 
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: modelName });
 

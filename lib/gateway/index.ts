@@ -23,9 +23,44 @@ import {
   GatewayResult,
   GatewayFinding,
 } from './types';
+import {
+  GatewayStage,
+  isPotentiallySensitive,
+  SensitiveLogContext,
+} from './logger';
 
 export * from './types';
 export * from './gemini';
+export * from './logger';
+
+/**
+ * Logs gateway errors with privacy guarantees:
+ * In every catch block, calls console.error('[gateway]', ...) with the stage label.
+ * If the error message could contain sensitive data, logs only error.name and the stage.
+ */
+export function logGatewayError(
+  stage: GatewayStage,
+  error: unknown,
+  context?: SensitiveLogContext
+): void {
+  const isSensitive = isPotentiallySensitive(error, stage, context);
+
+  if (isSensitive) {
+    console.error(
+      '[gateway]',
+      stage,
+      error instanceof Error ? error.name : 'unknown error'
+    );
+  } else {
+    console.error(
+      '[gateway]',
+      stage,
+      error instanceof Error
+        ? error.name + ': ' + error.message
+        : 'unknown error'
+    );
+  }
+}
 
 /**
  * Builds a sanitized text preview for preview mode or audit masking
@@ -89,8 +124,12 @@ export async function runGateway(
   input: GatewayInput,
   deps: GatewayDeps
 ): Promise<GatewayResult> {
+  let stage: GatewayStage = 'validate';
+  let sanitizedPrompt = '';
+
   try {
     // 1. Validation: non-empty string, max 20,000 characters
+    stage = 'validate';
     if (
       !input ||
       typeof input.prompt !== 'string' ||
@@ -112,6 +151,7 @@ export async function runGateway(
     }
 
     // 2. Pick policy preset (defaults to Student)
+    stage = 'policy';
     const policyKey = input.policyName || 'Student';
     const policy = PRESETS[policyKey] || PRESETS.Student;
 
@@ -119,8 +159,11 @@ export async function runGateway(
 
     // 3. Mode: Preview
     if (input.mode === 'preview') {
+      stage = 'detect';
       const detections = detectAll(input.prompt);
       const injection = detectInjection(input.prompt);
+
+      stage = 'policy';
       const evaluation = evaluate(detections, injection, policy);
 
       const findings: GatewayFinding[] = evaluation.items.map((i) => ({
@@ -139,6 +182,7 @@ export async function runGateway(
       );
 
       // Record audit row with action 'scan'
+      stage = 'audit';
       const categories = Array.from(new Set(findings.map((f) => f.type)));
       await writeAudit(
         {
@@ -166,8 +210,11 @@ export async function runGateway(
 
     // 4. Mode: Send
     // ALWAYS re-run detection on the server (never trust client findings)
+    stage = 'detect';
     const detections = detectAll(input.prompt);
     const injection = detectInjection(input.prompt);
+
+    stage = 'policy';
     const evaluation = evaluate(detections, injection, policy);
 
     const items: PolicyItem[] = [...evaluation.items];
@@ -204,6 +251,7 @@ export async function runGateway(
 
       // Record audit row with action 'override' per override batch
       if (overridesAppliedCount > 0) {
+        stage = 'audit';
         const overridePreview = buildSanitizedPreview(input.prompt, items);
         await writeAudit(
           {
@@ -221,6 +269,7 @@ export async function runGateway(
     }
 
     // Recheck decision after overrides
+    stage = 'policy';
     const hasBlockedItem = items.some((item) => item.action === 'block');
     const injectionScore = injection?.score ?? 0;
     const injectionBlocked =
@@ -231,6 +280,7 @@ export async function runGateway(
 
     // If blocked: return blocked status, record audit row, do NOT call LLM
     if (isBlocked) {
+      stage = 'audit';
       const blockedPreview = buildSanitizedPreview(input.prompt, items);
       const blockedCategories = Array.from(
         new Set(
@@ -261,17 +311,21 @@ export async function runGateway(
     }
 
     // Otherwise: create sanitized prompt with applyPolicy
+    stage = 'vault';
     const { sanitized, tokenMap } = await applyPolicy(
       input.prompt,
       items,
       requestId,
       deps.vaultStore
     );
+    sanitizedPrompt = sanitized;
 
     // Call LLM with sanitized prompt
+    stage = 'llm';
     const modelResponse = await deps.llm(sanitized);
 
     // Restore tokens in model response
+    stage = 'restore';
     const restoredAnswer = await restore(
       modelResponse,
       requestId,
@@ -279,6 +333,7 @@ export async function runGateway(
     );
 
     // Write audit row with action 'forward'
+    stage = 'audit';
     const forwardCategories = Array.from(
       new Set(items.map((i) => i.detection.type))
     );
@@ -302,8 +357,12 @@ export async function runGateway(
       sanitizedPrompt: sanitized,
       tokenMap,
     };
-  } catch {
+  } catch (error) {
     // FAIL CLOSED: any error returns safe error status without forwarding raw prompt
+    logGatewayError(stage, error, {
+      prompt: input?.prompt,
+      sanitized: sanitizedPrompt,
+    });
     return {
       status: 'error',
       message: 'Request blocked for safety',
