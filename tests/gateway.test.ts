@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { runGateway } from '@/lib/gateway';
+import { runGateway, makeGeminiLlm } from '@/lib/gateway';
 import { InMemoryVaultStore } from '@/lib/vault/store';
 import { InMemoryAuditStore, verifyChain } from '@/lib/audit';
 
@@ -486,5 +486,191 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
     expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
 
     errorSpy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 10. Gemini LLM Resilience & Vault Cleanup on Failure
+  // ---------------------------------------------------------------------------
+  it('retry succeeds on the second attempt', async () => {
+    let callCount = 0;
+    const mockModel = {
+      generateContent: vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          const err: any = new Error('Service Unavailable');
+          err.status = 503;
+          throw err;
+        }
+        return {
+          response: Promise.resolve({
+            text: () => 'Response after 503 retry',
+          }),
+        };
+      }),
+    };
+
+    const mockClient = {
+      getGenerativeModel: vi.fn(() => mockModel),
+    };
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+
+    try {
+      const llm = makeGeminiLlm({
+        client: mockClient as any,
+        retryDelays: [5, 10, 20],
+      });
+
+      const res = await runGateway(
+        { prompt: 'Tell me a safe joke', mode: 'send' },
+        { llm, vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        expect(res.answer).toBe('Response after 503 retry');
+      }
+      expect(callCount).toBe(2);
+      expect(mockModel.generateContent).toHaveBeenCalledTimes(2);
+    } finally {
+      if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+      else delete process.env.GEMINI_API_KEY;
+    }
+  });
+
+  it('no retry on 404', async () => {
+    let callCount = 0;
+    const mockModel = {
+      generateContent: vi.fn(async () => {
+        callCount++;
+        const err: any = new Error('Model not found');
+        err.status = 404;
+        throw err;
+      }),
+    };
+
+    const mockClient = {
+      getGenerativeModel: vi.fn(() => mockModel),
+    };
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+
+    try {
+      const llm = makeGeminiLlm({
+        client: mockClient as any,
+        retryDelays: [5, 10, 20],
+      });
+
+      const res = await runGateway(
+        { prompt: 'Tell me a safe joke', mode: 'send' },
+        { llm, vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('error');
+      expect(callCount).toBe(1);
+      expect(mockModel.generateContent).toHaveBeenCalledTimes(1);
+    } finally {
+      if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+      else delete process.env.GEMINI_API_KEY;
+    }
+  });
+
+  it('fallback used after repeated 503', async () => {
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+
+    const primaryModel = {
+      generateContent: vi.fn(async () => {
+        primaryCalls++;
+        const err: any = new Error('Service Unavailable');
+        err.status = 503;
+        throw err;
+      }),
+    };
+
+    const fallbackModel = {
+      generateContent: vi.fn(async () => {
+        fallbackCalls++;
+        return {
+          response: Promise.resolve({
+            text: () => 'Response from fallback model',
+          }),
+        };
+      }),
+    };
+
+    const mockClient = {
+      getGenerativeModel: vi.fn((params: { model: string }) => {
+        if (params.model === 'gemini-fallback-test') {
+          return fallbackModel;
+        }
+        return primaryModel;
+      }),
+    };
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    const prevFallback = process.env.GEMINI_FALLBACK_MODEL;
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+    process.env.GEMINI_FALLBACK_MODEL = 'gemini-fallback-test';
+
+    try {
+      const llm = makeGeminiLlm({
+        client: mockClient as any,
+        retryDelays: [5, 10, 20],
+      });
+
+      const res = await runGateway(
+        { prompt: 'Tell me a safe joke', mode: 'send' },
+        { llm, vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        expect(res.answer).toBe('Response from fallback model');
+      }
+      expect(primaryCalls).toBe(4); // 1 initial + 3 retries
+      expect(fallbackCalls).toBe(1); // 1 fallback attempt
+    } finally {
+      if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+      else delete process.env.GEMINI_API_KEY;
+
+      if (prevFallback) process.env.GEMINI_FALLBACK_MODEL = prevFallback;
+      else delete process.env.GEMINI_FALLBACK_MODEL;
+    }
+  });
+
+  it('the vault being cleaned after a failure', async () => {
+    const rawPhone = '9876543210';
+    const prompt = `Contact employee on phone ${rawPhone}.`;
+
+    const failingLlm = async () => {
+      throw new Error('LLM call failed permanently');
+    };
+
+    const removeSpy = vi.spyOn(vaultStore, 'remove');
+
+    const res = await runGateway(
+      {
+        prompt,
+        mode: 'send',
+        policyName: 'Developer',
+      },
+      {
+        llm: failingLlm,
+        vaultStore,
+        auditStore,
+      }
+    );
+
+    expect(res.status).toBe('error');
+    expect(res.message).toBe('Request blocked for safety');
+    // Ensure vaultStore.remove was called during finally cleanup
+    expect(removeSpy).toHaveBeenCalled();
+
+    // Verify in-memory store has zero remaining entries
+    const storeMap = (vaultStore as any).store as Map<string, any>;
+    expect(storeMap.size).toBe(0);
   });
 });

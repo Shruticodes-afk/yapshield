@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 
 type PolicyPreset = 'Student' | 'Developer' | 'Enterprise';
@@ -37,6 +37,16 @@ interface SendResponse {
   risk: RiskScore;
   sanitizedPrompt: string;
   tokenMap: { token: string; type: string }[];
+}
+
+interface GatewaySendApiResponse {
+  status?: 'ok' | 'blocked' | 'error' | 'bad_input' | string;
+  answer?: string;
+  risk?: RiskScore;
+  sanitizedPrompt?: string;
+  tokenMap?: { token: string; type: string }[];
+  message?: string;
+  reasons?: string[];
 }
 
 interface OverrideState {
@@ -171,27 +181,41 @@ export default function PlaygroundPage() {
   const [sendResult, setSendResult] = useState<SendResponse | null>(null);
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<{
+    message: string;
+    reasons?: string[];
+  } | null>(null);
   const [isAiDetailsOpen, setIsAiDetailsOpen] = useState(false);
+
+  const answerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (sendResult && answerRef.current) {
+      answerRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [sendResult]);
 
   // If the user edits the prompt after scanning, clear the scan result
   // and require a new scan because character offsets change.
   const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setPrompt(e.target.value);
-    if (scanResult || sendResult || errorMessage) {
+    if (scanResult || sendResult || errorMessage || sendError) {
       setScanResult(null);
       setOverrides({});
       setSendResult(null);
       setErrorMessage(null);
+      setSendError(null);
     }
   };
 
   const handlePolicyChange = (newPolicy: PolicyPreset) => {
     setPolicyName(newPolicy);
-    if (scanResult || sendResult || errorMessage) {
+    if (scanResult || sendResult || errorMessage || sendError) {
       setScanResult(null);
       setOverrides({});
       setSendResult(null);
       setErrorMessage(null);
+      setSendError(null);
     }
   };
 
@@ -205,6 +229,7 @@ export default function PlaygroundPage() {
     setIsScanning(true);
     setErrorMessage(null);
     setSendResult(null);
+    setSendError(null);
 
     try {
       const response = await fetch('/api/gateway', {
@@ -244,18 +269,23 @@ export default function PlaygroundPage() {
   const handleSend = async () => {
     if (!scanResult) return;
 
+    // Immediately show loading state and disable button
+    setIsSending(true);
+    setSendError(null);
+    setSendResult(null);
+
     // Validate that all overridden findings have a reason provided
     for (const [idxStr, override] of Object.entries(overrides)) {
       const idx = Number(idxStr);
       const finding = scanResult.findings[idx];
       if (finding && override.action !== finding.action && !override.reason.trim()) {
-        setErrorMessage(`Please provide a reason for overriding ${finding.type}.`);
+        setSendError({
+          message: `Please provide a reason for overriding ${finding.type}.`,
+        });
+        setIsSending(false);
         return;
       }
     }
-
-    setIsSending(true);
-    setErrorMessage(null);
 
     // Format overrides payload
     const formattedOverrides = Object.entries(overrides).map(([idxStr, ov]) => {
@@ -284,23 +314,65 @@ export default function PlaygroundPage() {
         }),
       });
 
-      const data = await response.json();
+      let data: GatewaySendApiResponse | null = null;
+      try {
+        data = (await response.json()) as GatewaySendApiResponse;
+      } catch {
+        // Response was not JSON
+      }
 
-      if (data.status === 'ok') {
-        setSendResult(data);
-      } else if (data.status === 'blocked') {
-        setErrorMessage(
-          `Request blocked by policy: ${
-            data.reasons ? data.reasons.join(', ') : 'Blocked'
-          }`
-        );
-      } else if (data.status === 'error') {
-        setErrorMessage('Request blocked for safety');
+      if (!response.ok || data?.status === 'error' || data?.status === 'blocked') {
+        if (response.status === 500 || data?.status === 'error') {
+          setSendError({
+            message:
+              'The gateway could not process this request. The prompt was NOT sent to the AI. Check the server terminal for the [gateway] log line.',
+          });
+        } else if (response.status === 400 || data?.status === 'bad_input') {
+          setSendError({
+            message: data?.message || 'Invalid request payload.',
+          });
+        } else if (data?.status === 'blocked' || response.status === 403) {
+          const reasons: string[] =
+            Array.isArray(data?.reasons) && data.reasons.length > 0
+              ? data.reasons
+              : ['Prompt violated security policy or exceeded prompt injection risk threshold.'];
+          setSendError({
+            message: 'Request blocked by policy:',
+            reasons,
+          });
+        } else {
+          setSendError({
+            message:
+              data?.message ||
+              'The gateway could not process this request. The prompt was NOT sent to the AI. Check the server terminal for the [gateway] log line.',
+          });
+        }
+        return;
+      }
+
+      if (
+        data?.status === 'ok' &&
+        typeof data.answer === 'string' &&
+        data.risk &&
+        typeof data.sanitizedPrompt === 'string' &&
+        Array.isArray(data.tokenMap)
+      ) {
+        setSendResult(data as SendResponse);
+        setSendError(null);
+        setTimeout(() => {
+          answerRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 50);
       } else {
-        setErrorMessage(data.message || 'Request could not be processed.');
+        setSendError({
+          message:
+            'The gateway could not process this request. The prompt was NOT sent to the AI. Check the server terminal for the [gateway] log line.',
+        });
       }
     } catch {
-      setErrorMessage('Network error: Failed to communicate with Gateway API.');
+      // Network failure
+      setSendError({
+        message: 'Could not reach the gateway',
+      });
     } finally {
       setIsSending(false);
     }
@@ -730,50 +802,77 @@ export default function PlaygroundPage() {
             )}
 
             {/* 5. Send to AI Action Section */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div>
-                <h4 className="text-sm font-semibold text-white">5. Forward to LLM</h4>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {isBlocked
-                    ? 'Blocked by security policy. You must edit your prompt to remove sensitive violations before continuing.'
-                    : 'Prompt passed policy checks. Sensitive items will be vaulted before forwarding.'}
-                </p>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-white">5. Forward to LLM</h4>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {isBlocked
+                      ? 'Blocked by security policy. You must edit your prompt to remove sensitive violations before continuing.'
+                      : 'Prompt passed policy checks. Sensitive items will be vaulted before forwarding.'}
+                  </p>
+                </div>
+
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleSend}
+                    disabled={isBlocked || isSending}
+                    className={`px-8 py-3 rounded-xl font-medium text-sm flex items-center gap-2 shadow-lg transition ${
+                      isBlocked || isSending
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950'
+                    }`}
+                  >
+                    {isSending ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Sending...
+                      </>
+                    ) : isBlocked ? (
+                      <>
+                        <span>🚫</span> Send Blocked by Policy
+                      </>
+                    ) : (
+                      <>
+                        <span>🚀</span> Send to AI
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
-              <div>
-                <button
-                  type="button"
-                  onClick={handleSend}
-                  disabled={isBlocked || isSending}
-                  className={`px-8 py-3 rounded-xl font-medium text-sm flex items-center gap-2 shadow-lg transition ${
-                    isBlocked
-                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950'
-                  }`}
+              {/* Red Message Box right under Send button */}
+              {sendError && (
+                <div
+                  role="alert"
+                  className="p-4 rounded-xl bg-red-950/90 border border-red-700 text-red-200 text-sm space-y-2 shadow-lg"
                 >
-                  {isSending ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Sanitizing & Sending...
-                    </>
-                  ) : isBlocked ? (
-                    <>
-                      <span>🚫</span> Send Blocked by Policy
-                    </>
-                  ) : (
-                    <>
-                      <span>🚀</span> Send to AI
-                    </>
-                  )}
-                </button>
-              </div>
+                  <div className="flex items-start gap-2.5">
+                    <span className="text-red-400 text-base font-bold leading-none mt-0.5">⚠️</span>
+                    <div className="flex-1 space-y-1.5">
+                      <p className="font-semibold text-red-100">{sendError.message}</p>
+                      {sendError.reasons && sendError.reasons.length > 0 && (
+                        <ul className="list-disc list-inside space-y-1 text-xs text-red-300 pl-1">
+                          {sendError.reasons.map((reason, idx) => (
+                            <li key={idx}>{reason}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}
 
         {/* 6. AI Output & Collapsible Inspection Box */}
         {sendResult && (
-          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+          <section
+            ref={answerRef}
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6"
+          >
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div>
                 <h3 className="text-lg font-semibold text-white flex items-center gap-2">

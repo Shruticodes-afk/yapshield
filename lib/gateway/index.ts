@@ -320,43 +320,55 @@ export async function runGateway(
     );
     sanitizedPrompt = sanitized;
 
-    // Call LLM with sanitized prompt
-    stage = 'llm';
-    const modelResponse = await deps.llm(sanitized);
+    let completed = false;
+    try {
+      // Call LLM with sanitized prompt
+      stage = 'llm';
+      const modelResponse = await deps.llm(sanitized);
 
-    // Restore tokens in model response
-    stage = 'restore';
-    const restoredAnswer = await restore(
-      modelResponse,
-      requestId,
-      deps.vaultStore
-    );
+      // Restore tokens in model response
+      stage = 'restore';
+      const restoredAnswer = await restore(
+        modelResponse,
+        requestId,
+        deps.vaultStore
+      );
 
-    // Write audit row with action 'forward'
-    stage = 'audit';
-    const forwardCategories = Array.from(
-      new Set(items.map((i) => i.detection.type))
-    );
-    await writeAudit(
-      {
-        userId: input.userId ?? null,
-        action: 'forward',
-        categories: forwardCategories,
-        riskScore: evaluation.risk.score,
-        decision: evaluation.decision,
-        maskedPrompt: sanitized,
-        overrideCount: overridesAppliedCount,
-      },
-      deps.auditStore
-    );
+      // Write audit row with action 'forward'
+      stage = 'audit';
+      const forwardCategories = Array.from(
+        new Set(items.map((i) => i.detection.type))
+      );
+      await writeAudit(
+        {
+          userId: input.userId ?? null,
+          action: 'forward',
+          categories: forwardCategories,
+          riskScore: evaluation.risk.score,
+          decision: evaluation.decision,
+          maskedPrompt: sanitized,
+          overrideCount: overridesAppliedCount,
+        },
+        deps.auditStore
+      );
 
-    return {
-      status: 'ok',
-      answer: restoredAnswer,
-      risk: evaluation.risk,
-      sanitizedPrompt: sanitized,
-      tokenMap,
-    };
+      completed = true;
+      return {
+        status: 'ok',
+        answer: restoredAnswer,
+        risk: evaluation.risk,
+        sanitizedPrompt: sanitized,
+        tokenMap,
+      };
+    } finally {
+      if (!completed) {
+        try {
+          await deps.vaultStore.remove(requestId);
+        } catch {
+          // Ignore vault removal error to avoid masking original failure
+        }
+      }
+    }
   } catch (error) {
     // FAIL CLOSED: any error returns safe error status without forwarding raw prompt
     logGatewayError(stage, error, {
