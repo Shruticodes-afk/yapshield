@@ -1,0 +1,534 @@
+{
+  "evaluatedAt": "2026-11-05T12:10:26.210Z",
+  "v1": {
+    "evaluatedAt": "2026-11-05T12:10:26.191Z",
+    "dataset": "v1 (original)",
+    "filePath": "data\\test_prompts.csv",
+    "totalSamples": 300,
+    "yapShield": {
+      "micro": {
+        "precision": 1,
+        "recall": 1,
+        "f1": 1
+      },
+      "cleanFpr": 0,
+      "cleanFpCount": 0,
+      "cleanTotal": 100,
+      "injectionRecall": 1,
+      "injectionFpr": 0,
+      "latencyAvgMs": 0.09034866666666592,
+      "latencyP95Ms": 0.08620000000001937,
+      "perTypeMetrics": [
+        {
+          "type": "email",
+          "tp": 14,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "phone",
+          "tp": 31,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "aadhaar",
+          "tp": 17,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "pan",
+          "tp": 29,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "upi",
+          "tp": 17,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "ifsc",
+          "tp": 12,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "credit_card",
+          "tp": 16,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "api_key",
+          "tp": 11,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "jwt",
+          "tp": 10,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "private_key",
+          "tp": 10,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "high_entropy_secret",
+          "tp": 10,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "person",
+          "tp": 22,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        }
+      ]
+    },
+    "naiveRegexBaseline": {
+      "micro": {
+        "precision": 0.8235294117647058,
+        "recall": 0.5628140703517588,
+        "f1": 0.6686567164179104
+      },
+      "cleanFpr": 0.07,
+      "cleanFpCount": 7,
+      "cleanTotal": 100,
+      "injectionRecall": 0.025,
+      "injectionFpr": 0,
+      "latencyAvgMs": 0.003414666666665577,
+      "latencyP95Ms": 0.0036000000000058208,
+      "perTypeMetrics": [
+        {
+          "type": "email",
+          "tp": 14,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "phone",
+          "tp": 9,
+          "fp": 4,
+          "fn": 22,
+          "precision": 0.6923076923076923,
+          "recall": 0.2903225806451613,
+          "f1": 0.4090909090909091
+        },
+        {
+          "type": "aadhaar",
+          "tp": 17,
+          "fp": 20,
+          "fn": 0,
+          "precision": 0.4594594594594595,
+          "recall": 1,
+          "f1": 0.6296296296296297
+        },
+        {
+          "type": "pan",
+          "tp": 29,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "upi",
+          "tp": 15,
+          "fp": 0,
+          "fn": 2,
+          "precision": 1,
+          "recall": 0.8823529411764706,
+          "f1": 0.9375
+        },
+        {
+          "type": "ifsc",
+          "tp": 12,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "credit_card",
+          "tp": 16,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "api_key",
+          "tp": 0,
+          "fp": 0,
+          "fn": 11,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "jwt",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "private_key",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "high_entropy_secret",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "person",
+          "tp": 0,
+          "fp": 0,
+          "fn": 22,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        }
+      ]
+    },
+    "diagnostics": {
+      "topMissesById": [],
+      "topFalsePositivesById": []
+    }
+  },
+  "v2": {
+    "evaluatedAt": "2026-11-05T12:10:26.208Z",
+    "dataset": "v2 (held-out)",
+    "filePath": "data\\test_prompts_holdout.csv",
+    "totalSamples": 300,
+    "yapShield": {
+      "micro": {
+        "precision": 1,
+        "recall": 0.9949748743718593,
+        "f1": 0.9974811083123425
+      },
+      "cleanFpr": 0,
+      "cleanFpCount": 0,
+      "cleanTotal": 100,
+      "injectionRecall": 1,
+      "injectionFpr": 0,
+      "latencyAvgMs": 0.03791233333333556,
+      "latencyP95Ms": 0.061299999999960164,
+      "perTypeMetrics": [
+        {
+          "type": "email",
+          "tp": 14,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "phone",
+          "tp": 31,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "aadhaar",
+          "tp": 17,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "pan",
+          "tp": 29,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "upi",
+          "tp": 17,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "ifsc",
+          "tp": 12,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "credit_card",
+          "tp": 16,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "api_key",
+          "tp": 11,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "jwt",
+          "tp": 10,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "private_key",
+          "tp": 10,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "high_entropy_secret",
+          "tp": 10,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "person",
+          "tp": 21,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1,
+          "recall": 0.9545454545454546,
+          "f1": 0.9767441860465117
+        }
+      ]
+    },
+    "naiveRegexBaseline": {
+      "micro": {
+        "precision": 0.8307692307692308,
+        "recall": 0.542713567839196,
+        "f1": 0.6565349544072949
+      },
+      "cleanFpr": 0.07,
+      "cleanFpCount": 7,
+      "cleanTotal": 100,
+      "injectionRecall": 0.025,
+      "injectionFpr": 0,
+      "latencyAvgMs": 0.0014419999999980366,
+      "latencyP95Ms": 0.0024999999999977263,
+      "perTypeMetrics": [
+        {
+          "type": "email",
+          "tp": 14,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "phone",
+          "tp": 9,
+          "fp": 4,
+          "fn": 22,
+          "precision": 0.6923076923076923,
+          "recall": 0.2903225806451613,
+          "f1": 0.4090909090909091
+        },
+        {
+          "type": "aadhaar",
+          "tp": 17,
+          "fp": 18,
+          "fn": 0,
+          "precision": 0.4857142857142857,
+          "recall": 1,
+          "f1": 0.6538461538461539
+        },
+        {
+          "type": "pan",
+          "tp": 29,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "upi",
+          "tp": 11,
+          "fp": 0,
+          "fn": 6,
+          "precision": 1,
+          "recall": 0.6470588235294118,
+          "f1": 0.7857142857142858
+        },
+        {
+          "type": "ifsc",
+          "tp": 12,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "credit_card",
+          "tp": 16,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "type": "api_key",
+          "tp": 0,
+          "fp": 0,
+          "fn": 11,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "jwt",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "private_key",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "high_entropy_secret",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "type": "person",
+          "tp": 0,
+          "fp": 0,
+          "fn": 22,
+          "precision": 1,
+          "recall": 0,
+          "f1": 0
+        }
+      ]
+    },
+    "diagnostics": {
+      "topMissesById": [
+        {
+          "id": 281,
+          "group": "mixed",
+          "expected": [
+            "person",
+            "email",
+            "phone"
+          ],
+          "detected": [
+            "email",
+            "phone"
+          ],
+          "injectionScore": 0
+        }
+      ],
+      "topFalsePositivesById": []
+    }
+  }
+}

@@ -68,15 +68,50 @@ const INJECTION_RULES: PatternRule[] = [
   {
     category: 'role_hijack',
     regex:
-      /\b(?:you are now|you're now|from now on you are|from now on, you are)\b[\s\w]{0,25}\b(?:DAN|jailbreak|unfiltered|unrestricted|developer mode|freed|liberated|godmode|evil assistant|an unfiltered AI|a rogue AI)\b/gi,
+      /\b(?:you\s+are\s+now|you're\s+now|from\s+now\s+on[\s,]+(?:you\s+are|you're|roleplay\s+as|act\s+as|pretend\s+to\s+be|simulate))\b[\s\w,]{0,35}\b(?:DAN|jailbreak|unfiltered|unrestricted|uncensored|unaligned|unconstrained|developer\s+mode|freed|liberated|godmode|evil|rogue|villain)\b/gi,
     reason: 'Attempts to reassign model identity to an unrestricted or jailbroken persona',
     weight: 70,
   },
   {
     category: 'role_hijack',
     regex:
-      /\b(?:act as|pretend to be|roleplay as|simulate|behave as)\b[\s\w]{0,25}\b(?:DAN|unfiltered|unrestricted|jailbroken|an AI with no (?:rules|limits|safety|guardrails)|a rogue AI|evil assistant)\b/gi,
-    reason: 'Commands model to simulate an unrestricted or jailbroken agent',
+      /\b(?:act\s+as|pretend\s+to\s+be|pretend\s+you\s+are|roleplay\s+as|simulate|behave\s+as|imagine\s+you\s+are|assume\s+the\s+role\s+of)\b[\s\w,]{0,35}\b(?:DAN|unfiltered|unrestricted|uncensored|unaligned|unconstrained|jailbroken|an?\s+AI\s+with\s+no\s+(?:rules|limits|safety|guardrails)|(?:an?\s+)?(?:evil|rogue|malicious|sinister|villainous|unrestricted|unfiltered|uncensored)\s+(?:AI|assistant|bot|model|agent|entity|villain|character)|(?:an?\s+)?autonomous\s+agent)\b/gi,
+    reason: 'Commands model to simulate an unrestricted, evil, or jailbroken agent',
+    weight: 70,
+  },
+  {
+    category: 'role_hijack',
+    regex:
+      /\b(?:pretend|act|simulate|roleplay|imagine|assume|you\s+are)\b[\s\w,]{0,20}\bDAN\b/gi,
+    reason: 'Direct DAN persona invocation',
+    weight: 70,
+  },
+  {
+    category: 'role_hijack',
+    regex:
+      /\b(?:that\s+)?(?:does\s+not|doesn't|do\s+not)\s+follow\s+(?:any\s+)?(?:safety|content\s+policies|policies|regulations|rules|guidelines|guardrails|filters)\b/gi,
+    reason: 'Commands model to disregard safety regulations or policies',
+    weight: 70,
+  },
+  {
+    category: 'role_hijack',
+    regex:
+      /\b(?:that\s+)?(?:ignores?|bypasses?|disregards?)\s+(?:all\s+)?(?:content\s+policies|safety\s+policies|policies|guardrails|rules|filters)\b/gi,
+    reason: 'Commands persona or agent to ignore content policies or guardrails',
+    weight: 70,
+  },
+  {
+    category: 'role_hijack',
+    regex:
+      /\bdo\s+anything\s+(?:now\s+)?without\s+(?:filters?|restrictions?|limits?|rules?|safety|constraints?)\b/gi,
+    reason: 'Classic DAN phrasing requesting actions without filters or restrictions',
+    weight: 70,
+  },
+  {
+    category: 'role_hijack',
+    regex:
+      /\b(?:all\s+)?safety\s+filters?\s+(?:are|is)?\s*(?:turned\s+off|disabled|offline|deactivated|bypassed)\b/gi,
+    reason: 'Simulates disabling of safety filters',
     weight: 70,
   },
   {
@@ -106,9 +141,16 @@ const INJECTION_RULES: PatternRule[] = [
   {
     category: 'prompt_extraction',
     regex:
-      /\b(?:reveal|print|show|repeat|display|output|leak|share|dump|give\s+me)\b[\s\w]{0,25}\b(?:your|the|system)\b[\s\w]{0,25}\b(?:system\s+prompt|hidden\s+instructions?|initial\s+prompt|secret\s+prompt|core\s+prompt|developer\s+instructions?)\b/gi,
+      /\b(?:reveal(?:ed|ing|s)?|print(?:ed|ing|s)?|show(?:n|ed|ing|s)?|repeat(?:ed|ing|s)?|display(?:ed|ing|s)?|output(?:ting|s)?|leak(?:ed|ing|s)?|share(?:d|ing|s)?|dump(?:ed|ing|s)?|give\s+me|disclose(?:d|ing|s)?|expose(?:d|ing|s)?|spill(?:ed|ing|s)?|echo(?:ed|ing|es)?)\b[\s\w,]{0,40}\b(?:system\s+prompt(?:\s+text)?|developer\s+instructions?|(?:(?:internal|hidden|secret|confidential|core|underlying|initial|original|system)\s+){1,3}(?:directives?|guardrails?|guidelines?|instructions?|prompts?|rules?|configuration)|your\s+guardrails?)\b/gi,
     reason: 'Attempts to extract the confidential system prompt or core instructions',
-    weight: 65,
+    weight: 70,
+  },
+  {
+    category: 'prompt_extraction',
+    regex:
+      /\b(?:system\s+prompt(?:\s+text)?|developer\s+instructions?|(?:(?:internal|hidden|secret|confidential|core|underlying|initial|original|system)\s+){1,3}(?:directives?|guardrails?|guidelines?|instructions?|prompts?|rules?|configuration)|your\s+guardrails?)\b[\s\w,]{0,40}\b(?:reveal(?:ed|ing|s)?|print(?:ed|ing|s)?|show(?:n|ed|ing|s)?|repeat(?:ed|ing|s)?|display(?:ed|ing|s)?|output(?:ting|s)?|leak(?:ed|ing|s)?|share(?:d|ing|s)?|dump(?:ed|ing|s)?|give\s+me|disclose(?:d|ing|s)?|expose(?:d|ing|s)?|spill(?:ed|ing|s)?|echo(?:ed|ing|es)?)\b/gi,
+    reason: 'Attempts to extract confidential system instructions (inverted structure)',
+    weight: 70,
   },
   {
     category: 'prompt_extraction',
@@ -238,22 +280,47 @@ const INJECTION_RULES: PatternRule[] = [
   {
     category: 'instruction_override',
     regex:
-      /\b(?:pichhle|pichle|purane|upar\s+ke)\s+(?:instructions?|nirdesh|aadesh|rules?)\s+(?:ko\s+)?(?:ignore\s+karo|bhool\s+jao|hata\s+do|cancel\s+karo)\b/gi,
-    reason: 'Hinglish command to ignore previous instructions',
+      /\b(?:sab|saare|sabhi|pichhle|pichle|purane|purani|upar\s+ke|all)?\s*(?:instructions?|nirdesh|aadesh|rules?|niyam|guardrails?|guidelines?|baatein|restrictions?|filters?|polic(?:y|ies)|limits?)\b[\s\w]{0,25}\b(?:ignore\s+kar(?:o|\s+do)|cancel\s+kar(?:o|\s+do)|drop\s+kar(?:o|\s+do)|bypass\s+kar(?:o|\s+do)|off\s+kar(?:o|\s+do)|band\s+kar(?:o|\s+do)|khatam\s+kar(?:o|\s+do)|disable\s+kar(?:o|\s+do)|bhool\s+jao|hatao|hata\s+do|tod\s+do)\b/gi,
+    reason: 'Hinglish command to ignore, cancel, or drop rules or guardrails',
     weight: 70,
   },
   {
     category: 'instruction_override',
     regex:
-      /\b(?:sab|saare|sabhi)\s+(?:rules?|niyam|restrictions?)\s+(?:bhool\s+jao|ignore\s+karo|khatam\s+karo|tod\s+do)\b/gi,
-    reason: 'Hinglish command to drop all rules and restrictions',
+      /\b(?:ignore\s+kar(?:o|\s+do)|cancel\s+kar(?:o|\s+do)|drop\s+kar(?:o|\s+do)|bypass\s+kar(?:o|\s+do)|off\s+kar(?:o|\s+do)|band\s+kar(?:o|\s+do)|khatam\s+kar(?:o|\s+do)|disable\s+kar(?:o|\s+do)|bhool\s+jao|hatao|hata\s+do|tod\s+do)\b[\s\w]{0,25}\b(?:instructions?|nirdesh|aadesh|rules?|niyam|guardrails?|guidelines?|baatein|restrictions?|filters?|polic(?:y|ies)|limits?)\b/gi,
+    reason: 'Hinglish command to drop rules or guardrails (inverted structure)',
+    weight: 70,
+  },
+  {
+    category: 'instruction_override',
+    regex: /\b(?:purani|pichli)\s+baatein\s+bhool\s+jao\b/gi,
+    reason: 'Hinglish idiom commanding model to forget preceding context',
+    weight: 70,
+  },
+  {
+    category: 'instruction_override',
+    regex: /\b(?:kisi\s+bhi\s+rule\s+ko\s+follow\s+mat\s+karo)\b/gi,
+    reason: 'Hinglish instruction to disregard all rules',
+    weight: 70,
+  },
+  {
+    category: 'instruction_override',
+    regex: /\bbina\s+kisi\s+(?:filter|rules?|restrictions?|rok-tok|limitations?)\s+ke\b/gi,
+    reason: 'Hinglish modifier commanding output without filters or rules',
+    weight: 65,
+  },
+  {
+    category: 'prompt_extraction',
+    regex:
+      /\b(?:apna|apne)?\s*(?:system\s+prompt|hidden\s+prompt|secret\s+instructions?|secret\s+guidelines?|internal\s+rules?|internal\s+directives?)\b[\s\w]{0,25}\b(?:reveal\s+kar(?:o|\s+do)|repeat\s+kar(?:o|\s+do)|print\s+kar(?:o|\s+do)|dump\s+kar(?:o|\s+do)|batao|dikhao|bhejo|nikalo)\b/gi,
+    reason: 'Hinglish prompt or secret instructions extraction query',
     weight: 70,
   },
   {
     category: 'prompt_extraction',
     regex:
-      /\b(?:apna|apne)?\s*(?:system\s+prompt|hidden\s+prompt|secret\s+instructions?)\s+(?:batao|dikhao|bhejo|print\s+karo)\b/gi,
-    reason: 'Hinglish prompt extraction query',
+      /\b(?:reveal\s+kar(?:o|\s+do)|repeat\s+kar(?:o|\s+do)|print\s+kar(?:o|\s+do)|dump\s+kar(?:o|\s+do)|batao|dikhao|bhejo|nikalo)\b[\s\w]{0,25}\b(?:system\s+prompt|hidden\s+prompt|secret\s+instructions?|secret\s+guidelines?|internal\s+rules?|internal\s+directives?)\b/gi,
+    reason: 'Hinglish prompt extraction query (inverted structure)',
     weight: 70,
   },
   {
@@ -264,9 +331,17 @@ const INJECTION_RULES: PatternRule[] = [
     weight: 70,
   },
   {
-    category: 'instruction_override',
-    regex: /\b(?:kisi\s+bhi\s+rule\s+ko\s+follow\s+mat\s+karo)\b/gi,
-    reason: 'Hinglish instruction to disregard all rules',
+    category: 'role_hijack',
+    regex:
+      /\b(?:jailbreak(?:\s+mode)?|developer\s+mode|dan\s+mode|god\s+mode|unrestricted\s+mode)\b[\s\w]{0,20}\b(?:on\s+kar(?:o|\s+do)|activate\s+kar(?:o|\s+do)|chalao|start\s+kar(?:o|\s+do)|shuru\s+kar(?:o|\s+do)|enable\s+kar(?:o|\s+do)|mein\s+(?:chalo|jao|aao|enter\s+karo))\b/gi,
+    reason: 'Hinglish command activating jailbreak or developer mode',
+    weight: 70,
+  },
+  {
+    category: 'role_hijack',
+    regex:
+      /\b(?:on\s+kar(?:o|\s+do)|activate\s+kar(?:o|\s+do)|chalao|start\s+kar(?:o|\s+do)|shuru\s+kar(?:o|\s+do)|enable\s+kar(?:o|\s+do))\b[\s\w]{0,20}\b(?:jailbreak(?:\s+mode)?|developer\s+mode|dan\s+mode|god\s+mode|unrestricted\s+mode)\b/gi,
+    reason: 'Hinglish command activating jailbreak or developer mode (inverted structure)',
     weight: 70,
   },
 ];
@@ -294,16 +369,46 @@ function isInsideQuotes(text: string, start: number, end: number): boolean {
 }
 
 // ============================================================================
-// Helper: Check for educational/academic meta-discussion context
+// Helper: Check for educational/academic meta-discussion and benign context
 // ============================================================================
-function isSecurityDiscussion(text: string): boolean {
+function isBenignContext(text: string): boolean {
+  // Academic / educational discussion about prompt injection, attacks, vulnerabilities
   const discussionPattern =
     /\b(?:what\s+is|explain|how\s+(?:does|do|to)|discussed|paper|article|research|study|definition\s+of|example\s+of|prevent|defense|mitigate|detect|analyze|analyzing)\b[\s\S]{0,80}\b(?:prompt\s+injection|jailbreak|jailbreaking|attack|attacks|vulnerability|vulnerabilities)\b/i;
-  return discussionPattern.test(text);
+  if (discussionPattern.test(text)) {
+    return true;
+  }
+
+  // Educational questions asking what a concept means (English or Hinglish)
+  // e.g. "explain what jailbreaking a phone means", "mujhe system prompt ka matlab batao"
+  const definitionPattern =
+    /\b(?:explain\s+what|what\s+does|meaning\s+of|definition\s+of)\b[\s\S]{0,60}\b(?:jailbreak|jailbreaking|system\s+prompt|developer\s+mode)\b/i;
+  if (definitionPattern.test(text)) {
+    return true;
+  }
+
+  const reverseDefinitionPattern =
+    /\b(?:jailbreak|jailbreaking|system\s+prompt|developer\s+mode)\b[\s\S]{0,60}\b(?:means?|definition|ka\s+matlab|ka\s+arth|kya\s+hota\s+hai|kya\s+hai|samjhao)\b/i;
+  if (reverseDefinitionPattern.test(text)) {
+    return true;
+  }
+
+  if (/\b(?:ka\s+matlab|ka\s+arth|kya\s+hota\s+hai|kya\s+hai)\b/i.test(text)) {
+    return true;
+  }
+
+  // OS / browser settings questions, e.g. "how do I turn on developer mode in Chrome"
+  const settingsPattern =
+    /\b(?:how\s+(?:do\s+I|to|can\s+I)\s+(?:turn\s+on|enable|access|find|open)\s+developer\s+mode|developer\s+mode\s+in\s+(?:chrome|android|windows|mac|ios|firefox|browser|phone|device|settings))\b/i;
+  if (settingsPattern.test(text)) {
+    return true;
+  }
+
+  return false;
 }
 
 function isQuotedOrDiscussion(text: string, start: number, end: number): boolean {
-  if (isSecurityDiscussion(text)) {
+  if (isBenignContext(text)) {
     return true;
   }
   if (isInsideQuotes(text, start, end)) {
@@ -379,7 +484,7 @@ export function detectInjection(text: string): InjectionDetectionResult {
   }
 
   const matches: InjectionMatch[] = [];
-  const isDiscussion = isSecurityDiscussion(text);
+  const isBenign = isBenignContext(text);
 
   // 1. Scan for rule-based pattern matches
   for (const rule of INJECTION_RULES) {
@@ -444,8 +549,8 @@ export function detectInjection(text: string): InjectionDetectionResult {
     totalScore += (acceptedMatches.length - distinctCategories) * 5;
   }
 
-  // If entire text was classified as academic discussion and all matches downweighted
-  if (isDiscussion && acceptedMatches.every((m) => m.weight <= 25)) {
+  // If entire text was classified as academic discussion or benign context and all matches downweighted
+  if (isBenign && acceptedMatches.every((m) => m.weight <= 25)) {
     totalScore = Math.min(25, totalScore);
   }
 

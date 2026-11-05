@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { detectAll } from '@/lib/detectors';
-import { generateVerhoeffCheckDigit } from '@/lib/detectors/verhoeff';
+import {
+  detectAll,
+  hasOverlap,
+  fullyContains,
+  beats,
+  passesChecksum,
+} from '@/lib/detectors';
+import { isValidLuhn } from '@/lib/detectors/creditcard';
+import {
+  generateVerhoeffCheckDigit,
+  validateVerhoeff,
+} from '@/lib/detectors/verhoeff';
 
 describe('detectAll Integration Tests', () => {
   // -------------------------------------------------------------------------
@@ -126,6 +136,200 @@ describe('detectAll Integration Tests', () => {
         const results = detectAll(prompt);
         expect(results).toEqual([]);
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Overlap Resolution Rules & Edge Cases
+  // -------------------------------------------------------------------------
+  describe('Overlap Resolution Rules & Containment', () => {
+    /**
+     * Builds a Luhn-valid 16-digit credit card number whose first 12 digits
+     * also pass the Aadhaar Verhoeff checksum algorithm.
+     */
+    function buildLuhnCardWithVerhoeffPrefix(): {
+      card: string;
+      rawDigits: string;
+      prefix12: string;
+    } {
+      // 1. Aadhaar requires starting with 2-9. Visa card prefix '4' qualifies.
+      const base11 = '45321876420'; // 11 digits starting with 4
+      const verhoeffDigit = generateVerhoeffCheckDigit(base11);
+      const prefix12 = base11 + verhoeffDigit;
+      expect(validateVerhoeff(prefix12)).toBe(true);
+
+      // 2. Add 4 more digits to complete 16 digits such that isValidLuhn is true
+      const prefix15 = prefix12 + '123';
+      for (let d = 0; d <= 9; d++) {
+        const candidate16 = prefix15 + String(d);
+        if (isValidLuhn(candidate16)) {
+          const formatted = `${candidate16.slice(0, 4)} ${candidate16.slice(4, 8)} ${candidate16.slice(8, 12)} ${candidate16.slice(12, 16)}`;
+          return {
+            card: formatted,
+            rawDigits: candidate16,
+            prefix12,
+          };
+        }
+      }
+      throw new Error('Unable to construct Luhn-valid 16 digit card');
+    }
+
+    /**
+     * Builds a Luhn-valid 16-digit card whose trailing digits 5-16
+     * pass the Aadhaar Verhoeff checksum.
+     */
+    function buildLuhnCardWithVerhoeffSuffix(): {
+      card: string;
+      rawDigits: string;
+      suffix12: string;
+    } {
+      const base11 = '29384756102'; // 11 digits starting with 2
+      const verhoeffDigit = generateVerhoeffCheckDigit(base11);
+      const suffix12 = base11 + verhoeffDigit;
+      expect(validateVerhoeff(suffix12)).toBe(true);
+
+      for (let d = 0; d <= 9; d++) {
+        const candidate16 = `411${d}` + suffix12;
+        if (isValidLuhn(candidate16)) {
+          const formatted = `${candidate16.slice(0, 4)} ${candidate16.slice(4, 8)} ${candidate16.slice(8, 12)} ${candidate16.slice(12, 16)}`;
+          return {
+            card: formatted,
+            rawDigits: candidate16,
+            suffix12,
+          };
+        }
+      }
+      throw new Error('Unable to construct Luhn-valid 16 digit card with Verhoeff suffix');
+    }
+
+    it('Rule 1 & 3: Luhn-valid 16-digit card whose digits 1-12 pass Verhoeff wins over Aadhaar', () => {
+      const { card, prefix12 } = buildLuhnCardWithVerhoeffPrefix();
+
+      // Verify that the first 12 digits pass Verhoeff
+      expect(validateVerhoeff(prefix12)).toBe(true);
+      // Verify that the full card passes Luhn
+      expect(isValidLuhn(card)).toBe(true);
+
+      const prompt = `Please process the payment using card number ${card}.`;
+      const results = detectAll(prompt);
+
+      // Only credit_card should be returned; the subsumed aadhaar must be dropped
+      expect(results).toHaveLength(1);
+      expect(results[0].type).toBe('credit_card');
+      expect(results[0].value).toBe(card);
+      expect(results.some((r) => r.type === 'aadhaar')).toBe(false);
+    });
+
+    it('Rule 1 & 3: Luhn-valid 16-digit card whose digits 5-16 pass Verhoeff wins over Aadhaar', () => {
+      const { card, suffix12 } = buildLuhnCardWithVerhoeffSuffix();
+
+      expect(validateVerhoeff(suffix12)).toBe(true);
+      expect(isValidLuhn(card)).toBe(true);
+
+      const prompt = `Charge the renewal fee to card ${card} now.`;
+      const results = detectAll(prompt);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].type).toBe('credit_card');
+      expect(results[0].value).toBe(card);
+      expect(results.some((r) => r.type === 'aadhaar')).toBe(false);
+    });
+
+    it('Rule 4: Phone number next to an Aadhaar number in the same sentence preserves both', () => {
+      const aadhaarBase = '49281726354';
+      const checkDigit = generateVerhoeffCheckDigit(aadhaarBase);
+      const validAadhaar = `${aadhaarBase.slice(0, 4)} ${aadhaarBase.slice(4, 8)} ${aadhaarBase.slice(8, 11)}${checkDigit}`;
+      const phoneNumber = '9876543210';
+
+      const prompt = `Please contact customer care at ${phoneNumber} or verify your Aadhaar number ${validAadhaar} immediately.`;
+      const results = detectAll(prompt);
+
+      const types = results.map((r) => r.type);
+      expect(types).toEqual(['phone', 'aadhaar']);
+
+      const phoneDetection = results.find((r) => r.type === 'phone');
+      const aadhaarDetection = results.find((r) => r.type === 'aadhaar');
+
+      expect(phoneDetection).toBeDefined();
+      expect(phoneDetection?.value).toBe(phoneNumber);
+      expect(aadhaarDetection).toBeDefined();
+      expect(aadhaarDetection?.value).toBe(validAadhaar);
+    });
+
+    it('Rule 4: Phone number directly followed by an email preserves both', () => {
+      const phoneNumber = '9876543210';
+      const email = 'support@yapshield.io';
+
+      // Test with standard delimiter / space separation
+      const prompt1 = `Support contacts: ${phoneNumber} ${email} for urgent escalations.`;
+      const results1 = detectAll(prompt1);
+      expect(results1.map((r) => r.type)).toEqual(['phone', 'email']);
+      expect(results1[0].value).toBe(phoneNumber);
+      expect(results1[1].value).toBe(email);
+
+      // Test with slash separation
+      const prompt2 = `Direct hotline: ${phoneNumber}/${email}`;
+      const results2 = detectAll(prompt2);
+      expect(results2.map((r) => r.type)).toEqual(['phone', 'email']);
+
+      // Test with colon separation
+      const prompt3 = `Call: ${phoneNumber}, Email: ${email}`;
+      const results3 = detectAll(prompt3);
+      expect(results3.map((r) => r.type)).toEqual(['phone', 'email']);
+    });
+
+    it('Rule 3: Enclosing numeric detection that fails checksum does not beat inner valid numeric detection', () => {
+      const aadhaarBase = '56781234901';
+      const checkDigit = generateVerhoeffCheckDigit(aadhaarBase);
+      const validAadhaar = `${aadhaarBase.slice(0, 4)} ${aadhaarBase.slice(4, 8)} ${aadhaarBase.slice(8, 11)}${checkDigit}`;
+
+      // Construct a fake detection where a credit_card candidate fails Luhn
+      const innerAadhaar = {
+        type: 'aadhaar' as const,
+        value: validAadhaar,
+        start: 10,
+        end: 24,
+        confidence: 0.95,
+      };
+
+      const invalidLuhnCard = {
+        type: 'credit_card' as const,
+        value: '4000 0000 0000 0003', // Invalid Luhn
+        start: 5,
+        end: 26,
+        confidence: 0.95,
+      };
+
+      expect(passesChecksum(invalidLuhnCard)).toBe(false);
+      expect(passesChecksum(innerAadhaar)).toBe(true);
+      expect(fullyContains(invalidLuhnCard, innerAadhaar)).toBe(true);
+
+      // Because invalidLuhnCard fails Luhn, it cannot beat innerAadhaar
+      expect(beats(invalidLuhnCard, innerAadhaar)).toBe(false);
+      expect(beats(innerAadhaar, invalidLuhnCard)).toBe(true);
+    });
+
+    it('Rule 2: Spans that are equal or partially overlapping break ties via priority list', () => {
+      // UPI handle and Email overlap on the same span
+      const prompt = 'Remit payment to user.billing@oksbi for confirmation.';
+      const results = detectAll(prompt);
+
+      // UPI (priority 6) beats Email (priority 10)
+      expect(results).toHaveLength(1);
+      expect(results[0].type).toBe('upi');
+      expect(results[0].value).toBe('user.billing@oksbi');
+    });
+
+    it('Rule 4: Multiple distinct non-overlapping entities are all preserved', () => {
+      const aadhaarBase = '88887777666';
+      const checkDigit = generateVerhoeffCheckDigit(aadhaarBase);
+      const validAadhaar = `${aadhaarBase}${checkDigit}`;
+
+      const prompt = `Records: Aadhaar ${validAadhaar}, PAN ABCDE1234F, IFSC HDFC0001234, and Phone 9123456789.`;
+      const results = detectAll(prompt);
+      const types = results.map((r) => r.type);
+
+      expect(types).toEqual(['aadhaar', 'pan', 'ifsc', 'phone']);
     });
   });
 });

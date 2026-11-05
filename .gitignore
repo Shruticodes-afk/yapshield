@@ -37,3 +37,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# holdout evaluation data
+/data/test_prompts_holdout.csv

@@ -41,6 +41,42 @@ const EXCLUDED_WORDS = new Set([
   'tonight',
 ]);
 
+// Non-name capitalized words that commonly appear after role words or salutations
+const NON_NAME_WORDS = new Set([
+  // Department / business / organizational terms
+  'support', 'portal', 'service', 'services', 'department', 'team', 'management',
+  'agreement', 'handbook', 'policy', 'policies', 'details', 'profile', 'profiles',
+  'account', 'accounts', 'record', 'records', 'information', 'data', 'history',
+  'form', 'forms', 'report', 'reports', 'center', 'desk', 'office', 'branch',
+  'group', 'network', 'company', 'status', 'overview', 'summary', 'guide',
+  'guidelines', 'instructions', 'rules', 'feedback', 'query', 'queries',
+  'request', 'requests', 'ticket', 'tickets', 'inquiry', 'inquiries', 'order',
+  'orders', 'payment', 'payments', 'invoice', 'invoices', 'billing', 'card',
+  'file', 'files', 'document', 'documents', 'dashboard', 'app', 'website',
+  'platform', 'system', 'systems', 'access', 'login', 'password', 'security',
+  'verification', 'registration', 'onboarding', 'activation', 'appointment',
+  'appointments', 'consultation', 'checkup', 'surgery', 'meeting', 'interview',
+  'evaluation', 'assessment', 'review', 'database', 'table', 'code', 'token',
+  // Role / generic titles used as salutations or descriptors
+  'sir', 'madam', 'all', 'both', 'everyone', 'customer', 'customers',
+  'user', 'users', 'client', 'clients', 'patient', 'patients', 'student',
+  'students', 'employee', 'employees', 'applicant', 'applicants', 'candidate',
+  'candidates', 'doctor', 'doctors', 'admin', 'admins', 'member', 'members',
+  'colleague', 'colleagues', 'friend', 'friends', 'folks', 'people', 'human',
+  'unknown', 'anonymous', 'none', 'null', 'na', 'placeholder',
+  // Common adjectives / adverbs / fillers
+  'new', 'old', 'current', 'former', 'primary', 'secondary', 'general',
+  'special', 'regular', 'standard', 'official', 'confidential', 'urgent',
+  'important', 'pending', 'approved', 'rejected', 'verified', 'active',
+  'inactive', 'ready', 'happy', 'sure', 'fine', 'done', 'sorry', 'busy',
+  'good', 'great', 'high', 'low', 'medium', 'first', 'second', 'third',
+  'last', 'next', 'previous', 'recent', 'daily', 'weekly', 'monthly', 'annual',
+  // Days & Months
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+  'september', 'october', 'november', 'december',
+]);
+
 /**
  * Checks if a character index represents the first word of a sentence.
  */
@@ -54,18 +90,30 @@ export function isStartOfSentence(text: string, index: number): boolean {
 }
 
 /**
- * Rule (a): Phrases like 'my name is X', 'I am X', 'this is X', 'name: X'
+ * Rule (a): Phrases like 'my name is X', 'I am X', 'this is X'
  * followed by 1 to 3 capitalized words.
  */
-const PHRASE_REGEX = /\b(?:my name is|i am|this is|name\s*:)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/gi;
+const PHRASE_REGEX = /\b(?:my name is|i am|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/gi;
 
 /**
- * Rule (b): Titles Mr, Mrs, Ms, Dr, Prof, Shri, Smt followed by 1 to 3 capitalized words.
+ * Rule (b): Role words and salutation patterns like:
+ * 'client X', 'customer X', 'patient X', 'student X', 'employee X',
+ * 'applicant X', 'candidate X', 'user X', 'mr X', 'mrs X', 'ms X', 'dr X', 'shri X', 'smt X',
+ * 'name: X', 'Regards, X', 'Dear X'
+ * followed by 1 to 3 capitalized words (confidence 0.7).
+ * NOTE: Do NOT use the /i flag here, so that [A-Z][a-z]+ strictly matches capitalized words
+ * and does not erroneously consume subsequent lowercase sentence words.
+ */
+const ROLE_PATTERN_REGEX =
+  /\b(?:[Cc]lient|[Cc]ustomer|[Pp]atient|[Ss]tudent|[Ee]mployee|[Aa]pplicant|[Cc]andidate|[Uu]ser|[Mm]r\.?|[Mm]rs\.?|[Mm]s\.?|[Dd]r\.?|[Ss]hri|[Ss]mt|[Nn][Aa][Mm][Ee]\s*:|[Rr]egards\s*,?|[Dd]ear)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g;
+
+/**
+ * Rule (c): Titles Mr, Mrs, Ms, Dr, Prof, Shri, Smt followed by 1 to 3 capitalized words (confidence 0.85).
  */
 const TITLE_REGEX = /\b(Mr|Mrs|Ms|Dr|Prof|Shri|Smt)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g;
 
 /**
- * Rule (c): List of common Indian first names, optionally followed by a capitalized surname.
+ * Rule (d): List of common Indian first names, optionally followed by a capitalized surname.
  */
 const INDIAN_NAME_REGEX = new RegExp(
   `\\b(${INDIAN_FIRST_NAMES.join('|')})(?:\\s+([A-Z][a-z]+))?\\b`,
@@ -88,7 +136,7 @@ export const detectPerson: Detector = (text: string): Detection[] => {
     const firstWord = namePart.split(/\s+/)[0].toLowerCase();
 
     // Skip if captured word is a common adjective/filler word
-    if (EXCLUDED_WORDS.has(firstWord)) {
+    if (EXCLUDED_WORDS.has(firstWord) || NON_NAME_WORDS.has(firstWord)) {
       continue;
     }
 
@@ -105,7 +153,57 @@ export const detectPerson: Detector = (text: string): Detection[] => {
   }
 
   // ------------------------------------------------------------------
-  // Rule (b): Title matches (confidence 0.85)
+  // Rule (b): Role words and salutation patterns (confidence 0.7)
+  // ------------------------------------------------------------------
+  const roleRegex = new RegExp(ROLE_PATTERN_REGEX.source, ROLE_PATTERN_REGEX.flags);
+  let roleMatch: RegExpExecArray | null;
+  while ((roleMatch = roleRegex.exec(text)) !== null) {
+    const namePart = roleMatch[1];
+    const matchPrefix = roleMatch[0].slice(0, roleMatch[0].lastIndexOf(namePart));
+
+    // Ensure no sentence-ending punctuation separates the role word from the name
+    if (/[.!?]/.test(matchPrefix)) {
+      continue;
+    }
+
+    const words = namePart.trim().split(/\s+/);
+    if (words.length === 0 || words.length > 3) {
+      continue;
+    }
+
+    // Check that every word is a valid capitalized name and not a generic non-name noun/role
+    let isInvalid = false;
+    for (const w of words) {
+      const lower = w.toLowerCase();
+      if (
+        NON_NAME_WORDS.has(lower) ||
+        EXCLUDED_WORDS.has(lower) ||
+        !/^[A-Z][a-z]+$/.test(w) ||
+        w.length < 2
+      ) {
+        isInvalid = true;
+        break;
+      }
+    }
+
+    if (isInvalid) {
+      continue;
+    }
+
+    const start = roleMatch.index + roleMatch[0].lastIndexOf(namePart);
+    const end = start + namePart.length;
+
+    candidates.push({
+      type: 'person',
+      value: namePart,
+      start,
+      end,
+      confidence: 0.7,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Rule (c): Title matches (confidence 0.85)
   // ------------------------------------------------------------------
   const titleRegex = new RegExp(TITLE_REGEX.source, TITLE_REGEX.flags);
   let titleMatch: RegExpExecArray | null;
