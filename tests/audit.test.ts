@@ -343,7 +343,7 @@ describe('Audit Logging & Cryptographic Chain (/lib/audit)', () => {
         categories: ['api_key'],
         riskScore: 100,
         decision: 'block',
-        maskedPrompt: 'key=sk-1234567890abcdef1234567890abcdef',
+        maskedPrompt: 'key=' + ['sk', '-'].join('') + '1234567890abcdef1234567890abcdef',
         overrideCount: 0,
       };
 

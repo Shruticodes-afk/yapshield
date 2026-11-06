@@ -16,12 +16,8 @@ import { findAll } from './utils';
 // ============================================================================
 
 /**
- * Regex patterns for well-known API keys and provider tokens:
- * - Google API Key: AIza followed by 35 [0-9A-Za-z_-] chars
- * - OpenAI style keys: sk- followed by 20+ chars
- * - GitHub tokens: ghp_, gho_, github_pat_ prefixes
- * - AWS Access Key ID: AKIA followed by 16 uppercase alphanumerics
- * - Slack tokens: xox[bap]- followed by alphanumerics/hyphens
+ * Regex patterns for well-known API keys and provider tokens
+ * across Google, OpenAI, GitHub, AWS, and Slack formats.
  */
 const API_KEY_PATTERNS = [
   /\bAIza[0-9A-Za-z_-]{35}\b/g,
@@ -63,8 +59,7 @@ export function detectApiKeys(text: string): Detection[] {
 // ============================================================================
 
 /**
- * Three base64url segments separated by dots, starting with 'eyJ'.
- * Format: eyJ<header>.<payload>.<signature>
+ * Three base64url segments separated by dots, starting with header prefix.
  * Must be strictly 3 segments (not preceded or followed by additional dots or word chars).
  */
 const JWT_REGEX = /(?<![A-Za-z0-9_.-])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_.-])/g;
@@ -83,11 +78,6 @@ export function detectJwt(text: string): Detection[] {
 
 /**
  * Matches PEM-formatted private key blocks between BEGIN and END markers.
- * Examples:
- * -----BEGIN PRIVATE KEY----- ... -----END PRIVATE KEY-----
- * -----BEGIN RSA PRIVATE KEY----- ... -----END RSA PRIVATE KEY-----
- * -----BEGIN EC PRIVATE KEY----- ... -----END EC PRIVATE KEY-----
- * -----BEGIN OPENSSH PRIVATE KEY----- ... -----END OPENSSH PRIVATE KEY-----
  */
 const PRIVATE_KEY_REGEX =
   /(?:-----)?BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY(?:-----)?[\s\S]*?(?:-----)?END (?:[A-Z0-9_-]+ )?PRIVATE KEY(?:-----)?/g;

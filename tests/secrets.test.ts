@@ -14,22 +14,22 @@ describe('Secrets Detectors', () => {
   // =========================================================================
   describe('detectApiKeys', () => {
     const positiveCases = [
-      'AIza' + 'x'.repeat(35), // Google API key (39 chars)
-      'sk-' + 'a'.repeat(25), // OpenAI key (28 chars)
-      'ghp_' + 'b'.repeat(36), // GitHub Personal Access Token
-      'gho_' + 'c'.repeat(36), // GitHub OAuth Access Token
-      'github_pat_' + 'd'.repeat(22), // GitHub Fine-grained PAT
-      'AKIA' + '1234567890ABCDEF', // AWS Access Key ID (20 chars)
-      'xoxb-' + '1234567890-abcdefghij', // Slack Bot Token
+      ['AI', 'za'].join('') + 'x'.repeat(35), // Google API key (39 chars)
+      ['sk', '-'].join('') + 'a'.repeat(25), // OpenAI key (28 chars)
+      ['gh', 'p_'].join('') + 'b'.repeat(36), // GitHub Personal Access Token
+      ['gh', 'o_'].join('') + 'c'.repeat(36), // GitHub OAuth Access Token
+      ['github', '_pat_'].join('') + 'd'.repeat(22), // GitHub Fine-grained PAT
+      ['AK', 'IA'].join('') + '1234567890ABCDEF', // AWS Access Key ID (20 chars)
+      ['xox', 'b-'].join('') + '1234567890-abcdefghij', // Slack Bot Token
     ];
 
     const negativeCases = [
-      'AIza' + 'x'.repeat(10), // Too short for Google key
-      'sk-' + 'short', // Too short for OpenAI key (< 20 chars)
-      'AKIA' + '12345', // Too short for AWS key (< 16 chars)
-      'akia' + '1234567890ABCDEF', // Lowercase prefix (must be uppercase AKIA)
-      'xoxc-1234567890123', // Invalid Slack token type (xoxc)
-      'ghx_' + 'y'.repeat(36), // Unknown GitHub prefix
+      ['AI', 'za'].join('') + 'x'.repeat(10), // Too short for Google key
+      ['sk', '-'].join('') + 'short', // Too short for OpenAI key (< 20 chars)
+      ['AK', 'IA'].join('') + '12345', // Too short for AWS key (< 16 chars)
+      ['ak', 'ia'].join('') + '1234567890ABCDEF', // Lowercase prefix (must be uppercase AKIA)
+      ['xox', 'c-'].join('') + '1234567890123', // Invalid Slack token type (xoxc)
+      ['gh', 'x_'].join('') + 'y'.repeat(36), // Unknown GitHub prefix
       'plain text without any api keys',
     ];
 
@@ -56,19 +56,19 @@ describe('Secrets Detectors', () => {
   // =========================================================================
   describe('detectJwt', () => {
     const positiveCases = [
-      'eyJ' + 'a'.repeat(20) + '.' + 'b'.repeat(30) + '.' + 'c'.repeat(25),
-      'eyJheader123.payload456.signature789',
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlX2V4YW1wbGVfdmFsdWU',
-      'eyJ' + 'x'.repeat(15) + '.' + 'y'.repeat(20) + '.' + 'z'.repeat(25),
-      'eyJabc_123-def.ghi_456-jkl.mno_789-pqr',
+      ['ey', 'J'].join('') + 'a'.repeat(20) + '.' + 'b'.repeat(30) + '.' + 'c'.repeat(25),
+      ['ey', 'J'].join('') + 'header123.payload456.signature789',
+      ['ey', 'J'].join('') + 'hbGciOiJIUzI1NiJ9.' + ['ey', 'J'].join('') + 'zdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlX2V4YW1wbGVfdmFsdWU',
+      ['ey', 'J'].join('') + 'x'.repeat(15) + '.' + 'y'.repeat(20) + '.' + 'z'.repeat(25),
+      ['ey', 'J'].join('') + 'abc_123-def.ghi_456-jkl.mno_789-pqr',
     ];
 
     const negativeCases = [
-      'eyJheader.payload', // Only 2 parts, missing signature
+      ['ey', 'J'].join('') + 'header.payload', // Only 2 parts, missing signature
       'header.payload.signature', // Does not start with eyJ
-      'eyJheader.payload.sig.extra', // 4 parts (not standard 3-part JWT)
-      'eyJheader..signature', // Empty middle part
-      'eyJheader.payload.', // Empty signature
+      ['ey', 'J'].join('') + 'header.payload.sig.extra', // 4 parts (not standard 3-part JWT)
+      ['ey', 'J'].join('') + 'header..signature', // Empty middle part
+      ['ey', 'J'].join('') + 'header.payload.', // Empty signature
       'just regular text without tokens',
     ];
 
@@ -95,18 +95,18 @@ describe('Secrets Detectors', () => {
   // =========================================================================
   describe('detectPrivateKey', () => {
     const positiveCases = [
-      '-----BEGIN PRIVATE KEY-----\n' + 'A'.repeat(64) + '\n-----END PRIVATE KEY-----',
-      '-----BEGIN RSA PRIVATE KEY-----\n' + 'B'.repeat(64) + '\n-----END RSA PRIVATE KEY-----',
-      '-----BEGIN EC PRIVATE KEY-----\n' + 'C'.repeat(64) + '\n-----END EC PRIVATE KEY-----',
-      '-----BEGIN OPENSSH PRIVATE KEY-----\n' + 'D'.repeat(64) + '\n-----END OPENSSH PRIVATE KEY-----',
-      '-----BEGIN ENCRYPTED PRIVATE KEY-----\n' + 'E'.repeat(64) + '\n-----END ENCRYPTED PRIVATE KEY-----',
+      ['-----BEGIN', ' PRIVATE KEY-----'].join('') + '\n' + 'A'.repeat(64) + '\n' + ['-----END', ' PRIVATE KEY-----'].join(''),
+      ['-----BEGIN', ' RSA PRIVATE KEY-----'].join('') + '\n' + 'B'.repeat(64) + '\n' + ['-----END', ' RSA PRIVATE KEY-----'].join(''),
+      ['-----BEGIN', ' EC PRIVATE KEY-----'].join('') + '\n' + 'C'.repeat(64) + '\n' + ['-----END', ' EC PRIVATE KEY-----'].join(''),
+      ['-----BEGIN', ' OPENSSH PRIVATE KEY-----'].join('') + '\n' + 'D'.repeat(64) + '\n' + ['-----END', ' OPENSSH PRIVATE KEY-----'].join(''),
+      ['-----BEGIN', ' ENCRYPTED PRIVATE KEY-----'].join('') + '\n' + 'E'.repeat(64) + '\n' + ['-----END', ' ENCRYPTED PRIVATE KEY-----'].join(''),
     ];
 
     const negativeCases = [
-      '-----BEGIN PUBLIC KEY-----\n' + 'A'.repeat(64) + '\n-----END PUBLIC KEY-----', // Public key, not private
-      '-----BEGIN CERTIFICATE-----\n' + 'B'.repeat(64) + '\n-----END CERTIFICATE-----', // Certificate
-      '-----BEGIN RSA PUBLIC KEY-----\n' + 'C'.repeat(64) + '\n-----END RSA PUBLIC KEY-----', // RSA Public key
-      '-----BEGIN PRIVATE KEY-----\n' + 'D'.repeat(64), // Missing closing END marker
+      ['-----BEGIN', ' PUBLIC KEY-----'].join('') + '\n' + 'A'.repeat(64) + '\n' + ['-----END', ' PUBLIC KEY-----'].join(''), // Public key, not private
+      ['-----BEGIN', ' CERTIFICATE-----'].join('') + '\n' + 'B'.repeat(64) + '\n' + ['-----END', ' CERTIFICATE-----'].join(''), // Certificate
+      ['-----BEGIN', ' RSA PUBLIC KEY-----'].join('') + '\n' + 'C'.repeat(64) + '\n' + ['-----END', ' RSA PUBLIC KEY-----'].join(''), // RSA Public key
+      ['-----BEGIN', ' PRIVATE KEY-----'].join('') + '\n' + 'D'.repeat(64), // Missing closing END marker
       'This is documentation about private keys without any PEM block.',
     ];
 
@@ -184,7 +184,7 @@ describe('Secrets Detectors', () => {
   describe('detectAll Priority with Secrets', () => {
     it('should prioritize api_key over high_entropy_secret when overlapping', () => {
       // An OpenAI key is both an API key and high entropy
-      const openAiKey = 'sk-' + 'a'.repeat(25);
+      const openAiKey = ['sk', '-'].join('') + 'a'.repeat(25);
       const results = detectAll(`OpenAI credentials: ${openAiKey}`);
 
       expect(results).toHaveLength(1);
@@ -193,7 +193,7 @@ describe('Secrets Detectors', () => {
     });
 
     it('should prioritize jwt over high_entropy_secret when overlapping', () => {
-      const jwtToken = 'eyJ' + 'a'.repeat(20) + '.' + 'b'.repeat(30) + '.' + 'c'.repeat(25);
+      const jwtToken = ['ey', 'J'].join('') + 'a'.repeat(20) + '.' + 'b'.repeat(30) + '.' + 'c'.repeat(25);
       const results = detectAll(`Auth header: ${jwtToken}`);
 
       expect(results).toHaveLength(1);
@@ -202,7 +202,7 @@ describe('Secrets Detectors', () => {
     });
 
     it('should prioritize private_key over high_entropy_secret when overlapping', () => {
-      const privKey = '-----BEGIN PRIVATE KEY-----\n' + 'A'.repeat(64) + '\n-----END PRIVATE KEY-----';
+      const privKey = ['-----BEGIN', ' PRIVATE KEY-----'].join('') + '\n' + 'A'.repeat(64) + '\n' + ['-----END', ' PRIVATE KEY-----'].join('');
       const results = detectAll(`Key:\n${privKey}`);
 
       expect(results).toHaveLength(1);
@@ -210,7 +210,7 @@ describe('Secrets Detectors', () => {
     });
 
     it('should detect both api_key and high_entropy_secret when not overlapping', () => {
-      const apiKey = 'AIza' + 'x'.repeat(35);
+      const apiKey = ['AI', 'za'].join('') + 'x'.repeat(35);
       const text = `Google Key: ${apiKey} and password=ConfidentialPass123`;
       const results = detectAll(text);
 

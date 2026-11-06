@@ -40,3 +40,7 @@ next-env.d.ts
 
 # holdout evaluation data
 /data/test_prompts_holdout.csv
+
+/data/test_prompts.csv
+
+/data/test_prompts.csv

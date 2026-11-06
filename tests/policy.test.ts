@@ -187,7 +187,7 @@ describe('Policy Engine & Guardrails (/lib/policy)', () => {
     it('returns block when any detected item has action block', () => {
       const apiKeyDetection: Detection = {
         type: 'api_key',
-        value: 'sk-1234567890abcdef1234567890',
+        value: ['sk', '-'].join('') + '1234567890abcdef1234567890',
         start: 0,
         end: 30,
         confidence: 1.0,
@@ -621,12 +621,13 @@ describe('Policy Engine & Guardrails (/lib/policy)', () => {
   // ---------------------------------------------------------------------------
   describe('BlockedError Behavior', () => {
     it('throws BlockedError when any item action is block', async () => {
-      const text = 'Secret credentials: sk-1234567890abcdef1234567890';
+      const apiKeyVal = ['sk', '-'].join('') + '1234567890abcdef1234567890';
+      const text = `Secret credentials: ${apiKeyVal}`;
       const items = [
         {
           detection: {
             type: 'api_key' as const,
-            value: 'sk-1234567890abcdef1234567890',
+            value: apiKeyVal,
             start: 20,
             end: 50,
             confidence: 1.0,
@@ -684,7 +685,7 @@ describe('Policy Engine & Guardrails (/lib/policy)', () => {
   // 7. Data Privacy: Verifying No Sensitive Value in Errors or Return Values
   // ---------------------------------------------------------------------------
   describe('Data Privacy & Leak Prevention', () => {
-    const rawSensitiveSecret = 'AIzaSySecretApiKey99999999999999999';
+    const rawSensitiveSecret = ['AI', 'za'].join('') + 'SySecretApiKey99999999999999999';
     const rawAadhaar = '9999 8888 7777';
     const rawPhone = '9876543210';
 

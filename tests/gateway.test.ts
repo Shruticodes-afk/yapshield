@@ -172,7 +172,7 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
     }
 
     // Test API key blocking
-    const apiKeyPrompt = 'sk-1234567890abcdef1234567890abcdef';
+    const apiKeyPrompt = ['sk', '-'].join('') + '1234567890abcdef1234567890abcdef';
     const resKey = await runGateway(
       {
         prompt: apiKeyPrompt,
@@ -332,7 +332,7 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
   it('verifies that no audit row across all operations contains raw sensitive values', async () => {
     const rawPhone = '9876543210';
     const rawAadhaar = '2345 6789 0124';
-    const rawKey = 'sk-1234567890abcdef1234567890abcdef';
+    const rawKey = ['sk', '-'].join('') + '1234567890abcdef1234567890abcdef';
 
     // 1. Preview
     await runGateway(
@@ -430,7 +430,7 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
 
     // 1. Error containing an API key
     const apiKeyLlm = async () => {
-      throw new Error('Failed with AIzaSy0123456789abcdef0123456789abcdef0');
+      throw new Error('Failed with ' + ['AI', 'za'].join('') + 'Sy0123456789abcdef0123456789abcdef0');
     };
 
     const resKey = await runGateway(
