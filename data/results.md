@@ -2,8 +2,8 @@
 
 **Dataset**: v1 (original)  
 **Total Test Prompts Evaluated**: 300  
-**Average Latency**: 0.09 ms  
-**p95 Latency**: 0.09 ms  
+**Average Latency**: 0.08 ms  
+**p95 Latency**: 0.08 ms  
 
 ## 1. Primary Model Performance (v1 (original))
 
@@ -55,8 +55,8 @@ No false positives recorded.
 
 **Dataset**: v2 (held-out)  
 **Total Test Prompts Evaluated**: 300  
-**Average Latency**: 0.04 ms  
-**p95 Latency**: 0.06 ms  
+**Average Latency**: 0.03 ms  
+**p95 Latency**: 0.05 ms  
 
 ## 1. Primary Model Performance (v2 (held-out))
 
