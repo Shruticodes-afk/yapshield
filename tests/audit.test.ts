@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   writeAudit,
   verifyChain,
@@ -400,6 +400,148 @@ describe('Audit Logging & Cryptographic Chain (/lib/audit)', () => {
     expect(verification).toEqual({
       valid: true,
       checked: concurrentCount,
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 7. Atomic Store Append & Fallback Paths
+  // ---------------------------------------------------------------------------
+  describe('Atomic store.append and custom store fallback', () => {
+    it('uses fallback latest + insert if store does not implement append', async () => {
+      const rows: any[] = [];
+      const legacyStore = {
+        latest: vi.fn(async () => (rows.length > 0 ? rows[rows.length - 1] : null)),
+        insert: vi.fn(async (row) => {
+          rows.push(row);
+        }),
+        all: vi.fn(async () => rows),
+      };
+
+      const entry: AuditEntry = {
+        userId: 'usr_legacy',
+        action: 'scan',
+        categories: ['email'],
+        riskScore: 10,
+        decision: 'allow',
+        maskedPrompt: 'Hello [EMAIL_1]',
+        overrideCount: 0,
+      };
+
+      const res = await writeAudit(entry, legacyStore);
+      expect(legacyStore.latest).toHaveBeenCalled();
+      expect(legacyStore.insert).toHaveBeenCalled();
+      expect(res.prevHash).toBe('GENESIS');
+      expect(rows).toHaveLength(1);
+    });
+
+    it('SupabaseAuditStore calls audit_append RPC and normalizes returned row', async () => {
+      const { SupabaseAuditStore } = await import('@/lib/audit/supabaseStore');
+      const supabaseModule = await import('@/lib/supabase');
+
+      const mockRpc = vi.fn().mockResolvedValue({
+        data: {
+          id: 42,
+          user_id: 'usr_rpc',
+          action: 'scan',
+          categories: ['email'],
+          risk_score: 20,
+          masked_prompt: 'Sanitized [EMAIL_1]',
+          decision: 'sanitize',
+          prev_hash: 'GENESIS',
+          hash: 'abc123hash',
+          created_at: '2026-10-18T10:00:00.000Z',
+        },
+        error: null,
+      });
+
+      const mockSupabase = {
+        rpc: mockRpc,
+      };
+
+      const spy = vi
+        .spyOn(supabaseModule, 'getServiceSupabase')
+        .mockReturnValue(mockSupabase as any);
+
+      try {
+        const store = new SupabaseAuditStore();
+        const row = await store.append({
+          userId: 'usr_rpc',
+          action: 'scan',
+          categories: ['email'],
+          riskScore: 20,
+          decision: 'sanitize',
+          maskedPrompt: 'Sanitized [EMAIL_1]',
+          overrideCount: 2,
+          createdAt: '2026-10-18T10:00:00.000Z',
+        });
+
+        expect(mockRpc).toHaveBeenCalledWith('audit_append', {
+          p_action: 'scan',
+          p_decision: 'sanitize',
+          p_masked_prompt: 'Sanitized [EMAIL_1]',
+          p_risk_score: 20,
+          p_categories: ['email'],
+          p_user_id: 'usr_rpc',
+          p_override_count: 2,
+          p_created_at: '2026-10-18T10:00:00.000Z',
+        });
+        expect(row.id).toBe(42);
+        expect(row.hash).toBe('abc123hash');
+        expect(row.overrideCount).toBe(2);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('SupabaseAuditStore falls back gracefully when audit_append RPC is not found (code 42883)', async () => {
+      const { SupabaseAuditStore } = await import('@/lib/audit/supabaseStore');
+      const supabaseModule = await import('@/lib/supabase');
+
+      const insertedRows: any[] = [];
+      const mockRpc = vi.fn().mockResolvedValue({
+        data: null,
+        error: { code: '42883', message: 'function audit_append does not exist' },
+      });
+
+      const mockSupabase = {
+        rpc: mockRpc,
+        from: vi.fn(() => ({
+          select: vi.fn(() => ({
+            order: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+            })),
+          })),
+          insert: vi.fn((rows: any[]) => {
+            insertedRows.push(...rows);
+            return Promise.resolve({ error: null });
+          }),
+        })),
+      };
+
+      const spy = vi
+        .spyOn(supabaseModule, 'getServiceSupabase')
+        .mockReturnValue(mockSupabase as any);
+
+      try {
+        const store = new SupabaseAuditStore();
+        const row = await store.append({
+          userId: 'usr_fallback',
+          action: 'scan',
+          categories: ['phone'],
+          riskScore: 15,
+          decision: 'allow',
+          maskedPrompt: 'Clean text',
+          overrideCount: 0,
+        });
+
+        expect(mockRpc).toHaveBeenCalled();
+        expect(mockSupabase.from).toHaveBeenCalledWith('audit_logs');
+        expect(row.prevHash).toBe('GENESIS');
+        expect(row.hash).toBeDefined();
+        expect(insertedRows).toHaveLength(1);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

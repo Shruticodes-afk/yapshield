@@ -11,93 +11,27 @@
  * - Defense in depth: writeAudit validates that maskedPrompt contains no raw sensitive values before recording.
  */
 
-import crypto from 'node:crypto';
 import { detectAll } from '../detectors';
 import { AuditEntry, AuditRow, VerifyChainResult } from './types';
 import { AuditStore, normalizeRow } from './store';
 import { SupabaseAuditStore } from './supabaseStore';
+import { computeHash, computeHashWithoutOverride } from './hash';
 
 export * from './types';
 export * from './store';
 export * from './supabaseStore';
+export * from './hash';
 
 /**
- * Computes the SHA-256 hash for an audit log entry.
- * Incorporates: prevHash, action, categories, riskScore, decision, maskedPrompt, overrideCount, createdAt.
+ * Writes an audit record to the store with cryptographic hash-chaining.
+ *
+ * Concurrency Safety:
+ * Replaces the in-process queue with an atomic approach. When the store provides
+ * an `append()` method (such as SupabaseAuditStore using PostgreSQL's pg_advisory_xact_lock
+ * or InMemoryAuditStore with serialized internal queue), writes are coordinated atomically
+ * across multiple serverless instances without race conditions.
  */
-export function computeHash(row: {
-  prevHash?: string;
-  prev_hash?: string;
-  action: string;
-  categories: string[];
-  riskScore?: number;
-  risk_score?: number;
-  decision: string;
-  maskedPrompt?: string;
-  masked_prompt?: string;
-  overrideCount?: number;
-  override_count?: number;
-  createdAt?: Date | string;
-  created_at?: Date | string;
-}): string {
-  const prev = row.prevHash ?? row.prev_hash ?? 'GENESIS';
-  const action = row.action;
-  const cats = (row.categories || []).join(',');
-  const risk = row.riskScore ?? row.risk_score ?? 0;
-  const decision = row.decision;
-  const prompt = row.maskedPrompt ?? row.masked_prompt ?? '';
-  const oc = row.overrideCount ?? row.override_count ?? 0;
-
-  const rawDate = row.createdAt ?? row.created_at ?? new Date();
-  const createdIso =
-    rawDate instanceof Date
-      ? rawDate.toISOString()
-      : new Date(rawDate).toISOString();
-
-  const payload = `${prev}|${action}|${cats}|${risk}|${decision}|${prompt}|${oc}|${createdIso}`;
-  return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
-}
-
-/**
- * Alternate hash without overrideCount for backward compatibility.
- */
-export function computeHashWithoutOverride(row: {
-  prevHash?: string;
-  prev_hash?: string;
-  action: string;
-  categories: string[];
-  riskScore?: number;
-  risk_score?: number;
-  decision: string;
-  maskedPrompt?: string;
-  masked_prompt?: string;
-  createdAt?: Date | string;
-  created_at?: Date | string;
-}): string {
-  const prev = row.prevHash ?? row.prev_hash ?? 'GENESIS';
-  const action = row.action;
-  const cats = (row.categories || []).join(',');
-  const risk = row.riskScore ?? row.risk_score ?? 0;
-  const decision = row.decision;
-  const prompt = row.maskedPrompt ?? row.masked_prompt ?? '';
-
-  const rawDate = row.createdAt ?? row.created_at ?? new Date();
-  const createdIso =
-    rawDate instanceof Date
-      ? rawDate.toISOString()
-      : new Date(rawDate).toISOString();
-
-  const payload = `${prev}|${action}|${cats}|${risk}|${decision}|${prompt}|${createdIso}`;
-  return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
-}
-
-// In-process serialization queue to safely serialize concurrent writes
-let writeQueue: Promise<unknown> = Promise.resolve();
-
-/**
- * Internal sequential write logic
- */
-async function internalWriteAudit(
+export async function writeAudit(
   entry: AuditEntry,
   store: AuditStore
 ): Promise<AuditRow> {
@@ -113,18 +47,21 @@ async function internalWriteAudit(
     );
   }
 
-  // 2. Format createdAt as ISO 8601 string
+  // 2. Atomic delegation: If the store implements append(), delegate directly
+  if (typeof store.append === 'function') {
+    return store.append(entry);
+  }
+
+  // 3. Fallback for custom stores implementing only latest() and insert()
   const rawCreatedAt = entry.createdAt || new Date();
   const createdAtIso =
     rawCreatedAt instanceof Date
       ? rawCreatedAt.toISOString()
       : new Date(rawCreatedAt).toISOString();
 
-  // 3. Determine prev_hash from the latest stored row (or 'GENESIS' for first row)
   const latestRow = await store.latest();
   const prevHash = latestRow ? latestRow.hash : 'GENESIS';
 
-  // 4. Compute cryptographic SHA-256 hash
   const hash = computeHash({
     prevHash,
     action: entry.action,
@@ -136,7 +73,6 @@ async function internalWriteAudit(
     createdAt: createdAtIso,
   });
 
-  // 5. Construct and normalize new audit row
   const rowToInsert: AuditRow = normalizeRow({
     userId: entry.userId,
     action: entry.action,
@@ -150,35 +86,9 @@ async function internalWriteAudit(
     createdAt: createdAtIso,
   });
 
-  // 6. Persist to store
   await store.insert(rowToInsert);
 
   return rowToInsert;
-}
-
-/**
- * Writes an audit record to the store with cryptographic hash-chaining.
- * Concurrent calls are strictly serialized through an in-process queue.
- */
-export async function writeAudit(
-  entry: AuditEntry,
-  store: AuditStore
-): Promise<AuditRow> {
-  return new Promise((resolve, reject) => {
-    writeQueue = writeQueue
-      .then(async () => {
-        try {
-          const res = await internalWriteAudit(entry, store);
-          resolve(res);
-        } catch (err) {
-          reject(err);
-        }
-      })
-      .catch((err) => {
-        // Prevent queue lock if an uncaught failure occurs
-        reject(err);
-      });
-  });
 }
 
 /**

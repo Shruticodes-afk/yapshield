@@ -630,7 +630,7 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       if (res.status === 'ok') {
         expect(res.answer).toBe('Response from fallback model');
       }
-      expect(primaryCalls).toBe(4); // 1 initial + 3 retries
+      expect(primaryCalls).toBe(3); // 1 initial + 2 retries (GEMINI_MAX_RETRIES default: 2)
       expect(fallbackCalls).toBe(1); // 1 fallback attempt
     } finally {
       if (prevKey) process.env.GEMINI_API_KEY = prevKey;
@@ -638,6 +638,73 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
 
       if (prevFallback) process.env.GEMINI_FALLBACK_MODEL = prevFallback;
       else delete process.env.GEMINI_FALLBACK_MODEL;
+    }
+  });
+
+  it('respects GEMINI_MAX_RETRIES configured via environment variable or options', async () => {
+    let callCount = 0;
+    const failingModel = {
+      generateContent: vi.fn(async () => {
+        callCount++;
+        const err = new Error('503 Service Unavailable');
+        (err as any).status = 503;
+        throw err;
+      }),
+    };
+    const mockClient = {
+      getGenerativeModel: vi.fn(() => failingModel),
+    };
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    const prevRetries = process.env.GEMINI_MAX_RETRIES;
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+    process.env.GEMINI_MAX_RETRIES = '1';
+
+    try {
+      const llm = makeGeminiLlm({
+        client: mockClient as any,
+        retryDelays: [5, 10],
+      });
+
+      await expect(llm('Hello')).rejects.toThrow();
+      // 1 initial + 1 retry = 2 attempts
+      expect(callCount).toBe(2);
+    } finally {
+      if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+      else delete process.env.GEMINI_API_KEY;
+
+      if (prevRetries) process.env.GEMINI_MAX_RETRIES = prevRetries;
+      else delete process.env.GEMINI_MAX_RETRIES;
+    }
+  });
+
+  it('respects GEMINI_TIMEOUT_MS per attempt', async () => {
+    const hangingModel = {
+      generateContent: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return {
+          response: Promise.resolve({ text: () => 'late' }),
+        };
+      }),
+    };
+    const mockClient = {
+      getGenerativeModel: vi.fn(() => hangingModel),
+    };
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+
+    try {
+      const llm = makeGeminiLlm({
+        client: mockClient as any,
+        timeoutMs: 30,
+        maxRetries: 0,
+      });
+
+      await expect(llm('Hello')).rejects.toThrow(/timed out/i);
+    } finally {
+      if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+      else delete process.env.GEMINI_API_KEY;
     }
   });
 

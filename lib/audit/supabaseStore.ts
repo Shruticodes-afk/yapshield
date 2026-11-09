@@ -21,9 +21,85 @@
 
 import { getServiceSupabase } from '@/lib/supabase';
 import { AuditStore, normalizeRow } from './store';
-import { AuditRow } from './types';
+import { AuditRow, AuditEntry } from './types';
+import { computeHash } from './hash';
 
 export class SupabaseAuditStore implements AuditStore {
+  /**
+   * Appends an audit log entry atomically using PostgreSQL RPC function 'audit_append'.
+   * 'audit_append' executes within a database transaction and acquires a transaction-level
+   * advisory lock (pg_advisory_xact_lock) so concurrent requests across multiple serverless
+   * instances cannot interleave or corrupt the hash chain.
+   */
+  async append(entry: AuditEntry): Promise<AuditRow> {
+    const supabase = getServiceSupabase();
+
+    const rawCreatedAt = entry.createdAt || new Date();
+    const createdAtIso =
+      rawCreatedAt instanceof Date
+        ? rawCreatedAt.toISOString()
+        : new Date(rawCreatedAt).toISOString();
+
+    const prompt = entry.maskedPrompt || '';
+
+    const { data, error } = await supabase.rpc('audit_append', {
+      p_action: entry.action,
+      p_decision: entry.decision,
+      p_masked_prompt: prompt,
+      p_risk_score: entry.riskScore ?? 0,
+      p_categories: Array.isArray(entry.categories) ? entry.categories : [],
+      p_user_id: entry.userId ?? null,
+      p_override_count: entry.overrideCount ?? 0,
+      p_created_at: createdAtIso,
+    });
+
+    if (error) {
+      // Fallback: If audit_append function is not installed in database yet (Postgres code 42883),
+      // perform sequential fallback so local/unmigrated DBs continue functioning
+      if (
+        error.code === '42883' ||
+        error.message?.includes('does not exist') ||
+        error.message?.includes('Could not find the function')
+      ) {
+        const latestRow = await this.latest();
+        const prevHash = latestRow ? latestRow.hash : 'GENESIS';
+        const hash = computeHash({
+          prevHash,
+          action: entry.action,
+          categories: entry.categories,
+          riskScore: entry.riskScore,
+          decision: entry.decision,
+          maskedPrompt: prompt,
+          overrideCount: entry.overrideCount ?? 0,
+          createdAt: createdAtIso,
+        });
+
+        const rowToInsert: AuditRow = normalizeRow({
+          userId: entry.userId,
+          action: entry.action,
+          categories: entry.categories,
+          riskScore: entry.riskScore,
+          decision: entry.decision,
+          maskedPrompt: prompt,
+          overrideCount: entry.overrideCount ?? 0,
+          prevHash,
+          hash,
+          createdAt: createdAtIso,
+        });
+
+        await this.insert(rowToInsert);
+        return rowToInsert;
+      }
+
+      throw new Error(`Failed to append audit log: ${error.message}`);
+    }
+
+    return normalizeRow({
+      ...data,
+      overrideCount: entry.overrideCount ?? 0,
+    });
+  }
+
   /**
    * Fetches the latest recorded audit log row from Supabase.
    */

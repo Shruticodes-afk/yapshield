@@ -1,3 +1,6 @@
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyChain } from '@/lib/audit';
 import { SupabaseAuditStore } from '@/lib/audit/supabaseStore';

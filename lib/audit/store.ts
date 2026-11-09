@@ -1,9 +1,11 @@
-import { AuditRow, AuditAction } from './types';
+import { AuditRow, AuditAction, AuditEntry } from './types';
+import { computeHash } from './hash';
 
 export interface AuditStore {
   latest(): Promise<AuditRow | null>;
   insert(row: AuditRow): Promise<void>;
   all(): Promise<AuditRow[]>;
+  append?(entry: AuditEntry): Promise<AuditRow>;
 }
 
 /**
@@ -58,6 +60,7 @@ export function normalizeRow(
 export class InMemoryAuditStore implements AuditStore {
   public rows: AuditRow[] = [];
   private nextId = 1;
+  private appendLock: Promise<unknown> = Promise.resolve();
 
   async latest(): Promise<AuditRow | null> {
     if (this.rows.length === 0) {
@@ -82,5 +85,61 @@ export class InMemoryAuditStore implements AuditStore {
   clear(): void {
     this.rows = [];
     this.nextId = 1;
+    this.appendLock = Promise.resolve();
+  }
+
+  async append(entry: AuditEntry): Promise<AuditRow> {
+    return new Promise((resolve, reject) => {
+      this.appendLock = this.appendLock
+        .then(async () => {
+          try {
+            const rawCreatedAt = entry.createdAt || new Date();
+            const createdAtIso =
+              rawCreatedAt instanceof Date
+                ? rawCreatedAt.toISOString()
+                : new Date(rawCreatedAt).toISOString();
+
+            const prevHash =
+              this.rows.length > 0
+                ? this.rows[this.rows.length - 1].hash
+                : 'GENESIS';
+
+            const prompt = entry.maskedPrompt || '';
+            const hash = computeHash({
+              prevHash,
+              action: entry.action,
+              categories: entry.categories,
+              riskScore: entry.riskScore,
+              decision: entry.decision,
+              maskedPrompt: prompt,
+              overrideCount: entry.overrideCount ?? 0,
+              createdAt: createdAtIso,
+            });
+
+            const id = this.nextId++;
+            const row: AuditRow = normalizeRow({
+              id,
+              userId: entry.userId,
+              action: entry.action,
+              categories: entry.categories,
+              riskScore: entry.riskScore,
+              decision: entry.decision,
+              maskedPrompt: prompt,
+              overrideCount: entry.overrideCount ?? 0,
+              prevHash,
+              hash,
+              createdAt: createdAtIso,
+            });
+
+            this.rows.push(row);
+            resolve(row);
+          } catch (err) {
+            reject(err);
+          }
+        })
+        .catch((err) => {
+          reject(err);
+        });
+    });
   }
 }

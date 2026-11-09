@@ -18,6 +18,7 @@ export interface GeminiLlmOptions {
   model?: string;
   fallbackModel?: string;
   timeoutMs?: number;
+  maxRetries?: number;
   retryDelays?: number[];
   client?: {
     getGenerativeModel: (
@@ -132,6 +133,26 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Total Worst-Case Time Budget Analysis (Vercel Serverless Function Limit):
+ *
+ * With default settings:
+ * - GEMINI_MAX_RETRIES = 2 (1 initial call + up to 2 retries on primary model)
+ * - GEMINI_TIMEOUT_MS = 15000 (15s per-attempt timeout)
+ * - Backoff delays = 1000ms (attempt 1 -> 2) + 2000ms (attempt 2 -> 3) + ~200ms jitter each = ~3.4s max sleep
+ * - Fallback model attempt = 1 call with timeoutMs
+ *
+ * Theoretical unbounded duration without deadline:
+ *   15s (initial) + 1.2s (backoff) + 15s (retry 1) + 2.2s (backoff) + 15s (retry 2) + 15s (fallback) = 63.4s
+ *
+ * To guarantee that the total worst-case execution time stays strictly under 50 seconds
+ * (comfortably within Vercel's maxDuration of 60 seconds), we enforce a hard 50,000 ms
+ * overall time budget ceiling (MAX_TOTAL_BUDGET_MS = 50000). Every attempt and backoff
+ * sleep is clamped to Math.min(timeoutMs, remainingBudget), ensuring the entire lifecycle
+ * never exceeds 50 seconds.
+ */
+export const MAX_TOTAL_BUDGET_MS = 50000;
+
+/**
  * Creates a Gemini LLM runner that executes inference on sanitized prompts
  * with retry resilience, optional model fallback, and request timeout.
  */
@@ -149,7 +170,21 @@ export function makeGeminiLlm(
     options?.model || process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const fallbackModelName =
     options?.fallbackModel || process.env.GEMINI_FALLBACK_MODEL;
-  const timeoutMs = options?.timeoutMs ?? 20000;
+
+  const envRetries = process.env.GEMINI_MAX_RETRIES
+    ? parseInt(process.env.GEMINI_MAX_RETRIES, 10)
+    : NaN;
+  const maxRetries =
+    options?.maxRetries ??
+    (!isNaN(envRetries) && envRetries >= 0 ? envRetries : 2);
+
+  const envTimeout = process.env.GEMINI_TIMEOUT_MS
+    ? parseInt(process.env.GEMINI_TIMEOUT_MS, 10)
+    : NaN;
+  const timeoutMs =
+    options?.timeoutMs ??
+    (!isNaN(envTimeout) && envTimeout > 0 ? envTimeout : 15000);
+
   const retryDelays =
     options?.retryDelays ??
     (process.env.NODE_ENV === 'test' && !process.env.GEMINI_SLOW_RETRY
@@ -163,17 +198,31 @@ export function makeGeminiLlm(
   );
 
   return async (sanitizedPrompt: string): Promise<string> => {
-    const maxRetries = 3;
+    const startTime = Date.now();
     let lastError: unknown;
 
-    // 1. Try primary model up to 1 + maxRetries times (initial + up to 3 retries)
+    const getRemainingBudget = () =>
+      Math.max(0, MAX_TOTAL_BUDGET_MS - (Date.now() - startTime));
+
+    // 1. Try primary model up to 1 + maxRetries times (initial + up to maxRetries retries)
     for (let attempt = 1; attempt <= 1 + maxRetries; attempt++) {
+      const remaining = getRemainingBudget();
+      if (remaining <= 0) {
+        const timeoutError = new Error(
+          `Request timed out: overall gateway budget of ${MAX_TOTAL_BUDGET_MS}ms exceeded`
+        );
+        timeoutError.name = 'TimeoutError';
+        throw timeoutError;
+      }
+
+      const effectiveTimeout = Math.min(timeoutMs, remaining);
+
       try {
         const text = await withTimeout(async () => {
           const result = await primaryModel.generateContent(sanitizedPrompt);
           const response = await result.response;
           return response.text();
-        }, timeoutMs);
+        }, effectiveTimeout);
 
         return text;
       } catch (error) {
@@ -196,11 +245,17 @@ export function makeGeminiLlm(
 
         // Wait with exponential backoff plus random jitter before next attempt
         if (attempt <= maxRetries) {
-          const baseDelay = retryDelays[attempt - 1] ?? 1000;
+          const baseDelay =
+            retryDelays[attempt - 1] ??
+            1000 * Math.pow(2, attempt - 1);
           const jitter = Math.floor(
             Math.random() * (process.env.NODE_ENV === 'test' ? 5 : 200)
           );
-          await sleep(baseDelay + jitter);
+          const remainingForSleep = getRemainingBudget();
+          const delay = Math.min(baseDelay + jitter, remainingForSleep);
+          if (delay > 0) {
+            await sleep(delay);
+          }
         }
       }
     }
@@ -213,17 +268,27 @@ export function makeGeminiLlm(
       fallbackModelName &&
       fallbackModelName.trim().length > 0
     ) {
+      const remainingForFallback = getRemainingBudget();
+      if (remainingForFallback <= 0) {
+        throw lastError;
+      }
+
+      const effectiveFallbackTimeout = Math.min(
+        timeoutMs,
+        remainingForFallback
+      );
+
       try {
         const fallbackModel = genAI.getGenerativeModel(
           { model: fallbackModelName },
-          { timeout: timeoutMs }
+          { timeout: effectiveFallbackTimeout }
         );
 
         const text = await withTimeout(async () => {
           const result = await fallbackModel.generateContent(sanitizedPrompt);
           const response = await result.response;
           return response.text();
-        }, timeoutMs);
+        }, effectiveFallbackTimeout);
 
         return text;
       } catch (fallbackError) {
