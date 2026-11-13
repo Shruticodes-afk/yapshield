@@ -9,6 +9,8 @@ import {
   GatewayStage,
   isPotentiallySensitive,
   SensitiveLogContext,
+  getClientIp,
+  checkRateLimit,
 } from '@/lib/gateway';
 import { makeGeminiLlm } from '@/lib/gateway/gemini';
 import { SupabaseVaultStore } from '@/lib/vault/supabaseStore';
@@ -50,6 +52,42 @@ export async function POST(request: NextRequest) {
       logGatewayError('validate', error);
       return NextResponse.json(
         { status: 'bad_input', message: 'Invalid JSON payload in request body.' },
+        { status: 400, headers: { 'Cache-Control': 'no-store' } }
+      );
+    }
+
+    // 1. Abuse Protection: Rate Limiting per Client IP (x-forwarded-for header)
+    // Allows at most 10 send requests and 30 preview requests per 10 minutes.
+    // NOTE: This in-memory rate limiter tracks requests per serverless instance.
+    // For strict rate limits across multiple concurrent serverless instances,
+    // a shared store (for example Supabase or Upstash Redis) is required.
+    const clientIp = getClientIp(request);
+    const mode = body.mode === 'preview' ? 'preview' : 'send';
+    const rateLimit = checkRateLimit(clientIp, mode);
+
+    if (!rateLimit.allowed) {
+      // Requirement 3: Never log the IP together with prompt content
+      console.warn('[gateway]', 'rate_limit', mode);
+      return NextResponse.json(
+        { message: 'Too many requests' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimit.retryAfter),
+            'Cache-Control': 'no-store',
+          },
+        }
+      );
+    }
+
+    // 2. Abuse Protection: Reject prompts longer than 4000 characters on this public deployment
+    if (typeof body.prompt === 'string' && body.prompt.length > 4000) {
+      return NextResponse.json(
+        {
+          status: 'bad_input',
+          message:
+            'Prompt exceeds maximum length of 4000 characters for this deployment.',
+        },
         { status: 400, headers: { 'Cache-Control': 'no-store' } }
       );
     }

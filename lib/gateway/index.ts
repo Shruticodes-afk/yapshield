@@ -32,6 +32,7 @@ import {
 export * from './types';
 export * from './gemini';
 export * from './logger';
+export * from './rateLimit';
 
 /**
  * Logs gateway errors with privacy guarantees:
