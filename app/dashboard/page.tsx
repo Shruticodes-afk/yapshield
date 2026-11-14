@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
   ResponsiveContainer,
@@ -12,11 +12,8 @@ import {
   LineChart,
   Line,
   CartesianGrid,
-  Cell,
 } from 'recharts';
-import RiskGauge from '@/components/RiskGauge';
-import StatusDot from '@/components/StatusDot';
-import HudPanel from '@/components/HudPanel';
+import { HudPanel, RiskGauge, CountUp, getRiskSeverity } from '@/components';
 
 interface AuditRow {
   id: number;
@@ -31,12 +28,31 @@ interface AuditRow {
   created_at: string;
 }
 
+interface CategoryDetail {
+  category: string;
+  count: number;
+  blockedCount: number;
+  averageRisk: number;
+  maxRisk: number;
+}
+
+interface RecentFlaggedScan {
+  createdAt: string;
+  decision: string;
+  riskScore: number;
+  categories: string[];
+}
+
 interface Aggregates {
   totalScans: number;
   blockedCount: number;
   injectionCount: number;
   averageRisk: number;
+  scansLast7Days: number;
+  latestTimestamp: string | null;
   categoriesCount: Record<string, number>;
+  categoryDetails: CategoryDetail[];
+  recentFlaggedScans: RecentFlaggedScan[];
   decisionsCount: Record<string, number>;
   riskOverTime: Array<{ date: string; averageRisk: number; count: number }>;
 }
@@ -55,22 +71,32 @@ interface VerifyResult {
 }
 
 export default function DashboardPage() {
-  // Passcode kept ONLY in active React memory (NEVER in localStorage or sessionStorage)
+  // Passcode kept ONLY in active React memory (never in localStorage or sessionStorage)
   const [passcode, setPasscode] = useState('');
   const [showPasscode, setShowPasscode] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Dashboard Telemetry Data
+  // Telemetry Data & Status
   const [isLoading, setIsLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [aggregates, setAggregates] = useState<Aggregates | null>(null);
+
+  // Theme tracking for Recharts SVG colors
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [hasAnimatedCharts, setHasAnimatedCharts] = useState(false);
+
+  // Risk Trends range toggle ('7d' | '30d' | 'all')
+  const [trendRange, setTrendRange] = useState<'7d' | '30d' | 'all'>('30d');
+
+  // Category filter state (triggered by clicking categories in Data at Risk panel)
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   // Filters State
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [filterDecision, setFilterDecision] = useState<string>('all');
-  const [filterAction, setFilterAction] = useState<string>('all');
   const [filterLevel, setFilterLevel] = useState<string>('all');
   const [limit, setLimit] = useState<number>(200);
 
@@ -79,12 +105,41 @@ export default function DashboardPage() {
   const [pageSize, setPageSize] = useState<number>(15);
   const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
 
-  // Cryptographic Chain Integrity State
+  // Hash Chain Integrity State & Block Animation
   const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyProgressIndex, setVerifyProgressIndex] = useState<number>(-1);
   const [verifyStatus, setVerifyStatus] = useState<VerifyResult | null>(null);
 
-  // Copy feedback for expanded hashes
+  // Copy feedback
   const [copiedHashId, setCopiedHashId] = useState<number | null>(null);
+
+  // Accessible document title
+  useEffect(() => {
+    document.title = 'Audit Dashboard | YapShield';
+  }, []);
+
+  // Theme observer to dynamically update Recharts colors
+  useEffect(() => {
+    const updateTheme = () => {
+      const activeTheme = document.documentElement.getAttribute('data-theme');
+      setTheme(activeTheme === 'light' ? 'light' : 'dark');
+    };
+    updateTheme();
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  // Mark charts as animated after first render of data
+  useEffect(() => {
+    if (aggregates && !hasAnimatedCharts) {
+      const timer = setTimeout(() => setHasAnimatedCharts(true), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [aggregates, hasAnimatedCharts]);
 
   // Fetch telemetry logs from server
   const fetchLogs = useCallback(
@@ -92,13 +147,13 @@ export default function DashboardPage() {
       if (!codeToUse) return;
       setIsLoading(true);
       setAuthError(null);
+      setFetchError(null);
 
       try {
         const queryParams = new URLSearchParams();
         if (fromDate) queryParams.set('from', `${fromDate}T00:00:00.000Z`);
         if (toDate) queryParams.set('to', `${toDate}T23:59:59.999Z`);
         if (filterDecision !== 'all') queryParams.set('decision', filterDecision);
-        if (filterAction !== 'all') queryParams.set('action', filterAction);
         if (filterLevel !== 'all') queryParams.set('level', filterLevel);
         queryParams.set('limit', String(limit));
 
@@ -109,7 +164,6 @@ export default function DashboardPage() {
           },
         });
 
-        // Clear error text for wrong passcode and 429
         if (res.status === 429) {
           setIsAuthenticated(false);
           setAuthError('Too many attempts, try again later');
@@ -125,7 +179,7 @@ export default function DashboardPage() {
         const data: LogsApiResponse = await res.json();
 
         if (data.error) {
-          setAuthError(data.error);
+          setFetchError(data.error);
         } else {
           setRows(data.rows || []);
           setAggregates(data.aggregates || null);
@@ -133,12 +187,12 @@ export default function DashboardPage() {
           setCurrentPage(1);
         }
       } catch {
-        setAuthError('Network error: Unable to reach audit telemetry API.');
+        setFetchError('Network error: Unable to reach audit telemetry API.');
       } finally {
         setIsLoading(false);
       }
     },
-    [fromDate, toDate, filterDecision, filterAction, filterLevel, limit]
+    [fromDate, toDate, filterDecision, filterLevel, limit]
   );
 
   // Handle Passcode Submission
@@ -158,22 +212,35 @@ export default function DashboardPage() {
     }
   }, [fetchLogs, isAuthenticated, passcode]);
 
-  // Clear Filters Button Handler
+  // Clear Filters Handler
   const handleClearFilters = () => {
     setFromDate('');
     setToDate('');
     setFilterDecision('all');
-    setFilterAction('all');
     setFilterLevel('all');
+    setSelectedCategory(null);
     setLimit(200);
     setCurrentPage(1);
   };
 
-  // Verify Integrity with loading state and banner
+  // Verify Integrity handler with sequential linked-block animation
   const handleVerifyChain = async () => {
-    if (!passcode) return;
+    if (!passcode || isVerifying) return;
     setIsVerifying(true);
     setVerifyStatus(null);
+    setVerifyProgressIndex(0);
+
+    const totalCount = aggregates?.totalScans || rows.length || 8;
+    const targetBlocks = Math.min(12, totalCount > 0 ? totalCount : 8);
+
+    let step = 0;
+    const interval = setInterval(() => {
+      step++;
+      setVerifyProgressIndex(step);
+      if (step >= targetBlocks) {
+        clearInterval(interval);
+      }
+    }, 70);
 
     try {
       const res = await fetch('/api/audit/verify', {
@@ -184,27 +251,30 @@ export default function DashboardPage() {
       });
 
       const data: VerifyResult = await res.json();
-      setVerifyStatus(data);
+
+      setTimeout(() => {
+        clearInterval(interval);
+        setVerifyProgressIndex(targetBlocks);
+        setVerifyStatus(data);
+        setIsVerifying(false);
+      }, Math.max(0, targetBlocks * 70));
     } catch {
+      clearInterval(interval);
       setVerifyStatus({
         valid: false,
         error: 'Network failure during integrity check.',
       });
-    } finally {
       setIsVerifying(false);
     }
   };
 
-  // Safe CSV Cell Sanitizer (Formula Injection Protection)
+  // CSV Cell Sanitizer (Neutralizes spreadsheet formula injection)
   const sanitizeCsvCell = (value: unknown): string => {
     if (value === null || value === undefined) return '""';
     let str = String(value);
-
-    // Neutralize formula injection by prefixing =, +, -, @, \t, \r with single quote
     if (/^[=+\-@\t\r]/.test(str)) {
       str = `'${str}`;
     }
-
     str = str.replace(/"/g, '""');
     return `"${str}"`;
   };
@@ -220,7 +290,7 @@ export default function DashboardPage() {
       'Decision',
       'Risk Score',
       'Categories',
-      'Masked Prompt (Sanitized)',
+      'Masked Prompt',
       'Prev Hash',
       'Hash',
     ];
@@ -258,7 +328,6 @@ export default function DashboardPage() {
     URL.revokeObjectURL(url);
   };
 
-  // Copy hash helper
   const handleCopyHash = async (id: number, text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -269,167 +338,316 @@ export default function DashboardPage() {
     }
   };
 
-  // Readable Risk Badges (Requirement 4)
+  // Readable Risk Badges that include both an icon and text
   const renderRiskBadge = (score: number) => {
     if (score >= 85) {
       return (
-        <span className="badge-critical">
-          <span aria-hidden="true">✖</span>
+        <span className="badge badge-critical inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border">
+          <svg
+            className="w-2.5 h-2.5 text-red-400 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
           <span>Critical ({score})</span>
         </span>
       );
     }
     if (score >= 60) {
       return (
-        <span className="badge-high">
-          <span aria-hidden="true">◆</span>
+        <span className="badge badge-high inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border">
+          <svg
+            className="w-2.5 h-2.5 text-rose-400 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
           <span>High ({score})</span>
         </span>
       );
     }
     if (score >= 30) {
       return (
-        <span className="badge-medium">
-          <span aria-hidden="true">▲</span>
+        <span className="badge badge-warn inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border">
+          <svg
+            className="w-2.5 h-2.5 text-amber-400 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="8" y1="12" x2="16" y2="12" />
+          </svg>
           <span>Medium ({score})</span>
         </span>
       );
     }
     return (
-      <span className="badge-low">
-        <span aria-hidden="true">✓</span>
+      <span className="badge badge-ok inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border">
+        <svg
+          className="w-2.5 h-2.5 text-emerald-400 flex-shrink-0"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
         <span>Low ({score})</span>
       </span>
     );
   };
 
-  // Decision Badges
+  // Decision Badges with icon and text
   const renderDecisionBadge = (decision: string) => {
     switch (decision.toLowerCase()) {
       case 'block':
         return (
-          <span className="badge-critical font-mono">
-            <span aria-hidden="true">🚫</span>
+          <span className="badge badge-critical inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border">
+            <svg
+              className="w-2.5 h-2.5 text-red-400 flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+            </svg>
             <span>BLOCK</span>
           </span>
         );
       case 'sanitize':
         return (
-          <span className="badge-medium font-mono">
-            <span aria-hidden="true">🔒</span>
+          <span className="badge badge-accent inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border">
+            <svg
+              className="w-2.5 h-2.5 text-[var(--accent)] flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
             <span>SANITIZE</span>
           </span>
         );
       case 'review':
         return (
-          <span className="badge-medium font-mono text-cyan-300 border-cyan-700 bg-cyan-950/60">
-            <span aria-hidden="true">👁️</span>
+          <span className="badge badge-warn inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border">
+            <svg
+              className="w-2.5 h-2.5 text-amber-400 flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+            </svg>
             <span>REVIEW</span>
           </span>
         );
       case 'allow':
         return (
-          <span className="badge-low font-mono">
-            <span aria-hidden="true">✓</span>
+          <span className="badge badge-ok inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border">
+            <svg
+              className="w-2.5 h-2.5 text-emerald-400 flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
             <span>ALLOW</span>
           </span>
         );
       default:
         return (
-          <span className="badge-low font-mono">
+          <span className="badge badge-neutral inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border">
             <span>{decision.toUpperCase()}</span>
           </span>
         );
     }
   };
 
-  // Chart Data Helpers
-  const categoryChartData = aggregates
-    ? Object.entries(aggregates.categoriesCount).map(([category, count]) => ({
-        category,
-        count,
-      }))
-    : [];
+  // Recharts Theme-Aware Color Palette
+  const chartColors = useMemo(() => {
+    if (theme === 'light') {
+      return {
+        accent: '#0891b2',
+        accentStrong: '#0e7490',
+        warn: '#b45309',
+        grid: '#c9d6e2',
+        text: '#4a5d6e',
+        tooltipBg: '#ffffff',
+        tooltipBorder: '#c9d6e2',
+        tooltipText: '#0b1620',
+      };
+    }
+    return {
+      accent: '#22d3ee',
+      accentStrong: '#06b6d4',
+      warn: '#fbbf24',
+      grid: 'rgba(45,212,191,0.22)',
+      text: '#9bb3bf',
+      tooltipBg: '#0a1724',
+      tooltipBorder: 'rgba(45,212,191,0.22)',
+      tooltipText: '#e6f1f5',
+    };
+  }, [theme]);
 
-  const decisionChartData = aggregates
-    ? Object.entries(aggregates.decisionsCount).map(([decision, count]) => ({
-        decision: decision.toUpperCase(),
-        count,
-      }))
-    : [];
-
-  const getDecisionBarColor = (dec: string) => {
-    switch (dec.toLowerCase()) {
-      case 'block':
-        return '#ef4444';
-      case 'sanitize':
-        return '#2dd4bf';
-      case 'review':
-        return '#fbbf24';
-      case 'allow':
-        return '#22c55e';
-      default:
-        return '#9bb3bf';
+  // Formatted date string for "Last updated: ..."
+  const formatLastUpdated = (timestamp: string | null) => {
+    if (!timestamp) return 'No scans yet';
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return 'No scans yet';
+      return (
+        date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+        ' (' +
+        date.toLocaleDateString() +
+        ')'
+      );
+    } catch {
+      return 'No scans yet';
     }
   };
 
+  // Relative time helper for recent flagged scans
+  const formatRelativeTime = (timestamp: string) => {
+    try {
+      const diff = Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
+      if (diff < 60) return `${Math.max(1, diff)}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return `${Math.floor(diff / 86400)}d ago`;
+    } catch {
+      return 'just now';
+    }
+  };
+
+  // Chart Data: Top Detections Bar Chart
+  const categoryChartData = useMemo(() => {
+    if (!aggregates?.categoryDetails) return [];
+    return aggregates.categoryDetails.slice(0, 8).map((c) => ({
+      category: c.category,
+      count: c.count,
+    }));
+  }, [aggregates]);
+
+  // Chart Data: Risk Trends line chart with 7d, 30d, All toggle
+  const filteredRiskTrendData = useMemo(() => {
+    const data = aggregates?.riskOverTime || [];
+    if (trendRange === '7d') return data.slice(-7);
+    if (trendRange === '30d') return data.slice(-30);
+    return data;
+  }, [aggregates, trendRange]);
+
+  // Latest point in the trend data
+  const latestTrendPoint = useMemo(() => {
+    if (filteredRiskTrendData.length === 0) return null;
+    return filteredRiskTrendData[filteredRiskTrendData.length - 1];
+  }, [filteredRiskTrendData]);
+
+  // Filtered rows for logs table (incorporating selectedCategory from Data at Risk panel)
+  const displayRows = useMemo(() => {
+    if (!selectedCategory) return rows;
+    return rows.filter(
+      (r) => Array.isArray(r.categories) && r.categories.includes(selectedCategory)
+    );
+  }, [rows, selectedCategory]);
+
   // Pagination Slice
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const paginatedRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const totalPages = Math.max(1, Math.ceil(displayRows.length / pageSize));
+  const paginatedRows = useMemo(() => {
+    return displayRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  }, [displayRows, currentPage, pageSize]);
+
+  // Linked Blocks Count calculation
+  const totalEntriesForBlocks = aggregates?.totalScans || rows.length || 8;
+  const displayBlockCount = Math.min(12, totalEntriesForBlocks > 0 ? totalEntriesForBlocks : 8);
+  const overflowBlockCount = totalEntriesForBlocks > 12 ? totalEntriesForBlocks - 12 : 0;
+
+  // Average risk severity metadata
+  const avgRiskSeverity = useMemo(() => {
+    return getRiskSeverity(aggregates ? Math.round(aggregates.averageRisk) : 0);
+  }, [aggregates]);
 
   // =========================================================================
-  // 1. Passcode Screen (Requirement 1: Centered hud-panel with show/hide)
+  // Passcode Screen (Centered .hud-panel)
   // =========================================================================
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[var(--bg-0)] text-[var(--text)] grid-bg flex flex-col justify-center items-center p-4">
-        <div className="max-w-md w-full">
-          <HudPanel
-            title="SOC Terminal Gate"
-            tag="AUTHENTICATION"
-            brackets={true}
-            className="shadow-2xl"
-          >
-            <div className="space-y-6">
-              <div className="text-center space-y-2">
-                <div
-                  className="w-14 h-14 rounded-2xl bg-[rgba(4,11,20,0.85)] border border-[var(--panel-border)] flex items-center justify-center mx-auto text-[#2dd4bf] shadow-[0_0_20px_rgba(45,212,191,0.2)]"
-                  aria-hidden="true"
-                >
-                  <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                  </svg>
-                </div>
-                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
-                  Audit Telemetry Access
+      <div className="min-h-[80vh] flex flex-col justify-center items-center p-4 relative overflow-hidden">
+        {/* Subtle grid background */}
+        <div className="absolute inset-0 pointer-events-none grid-bg opacity-40" aria-hidden="true" />
+
+        <div className="max-w-md w-full relative z-10">
+          <HudPanel title="Audit Log Access" tag="AUTH_REQUIRED">
+            <div className="space-y-6 pt-2">
+              <div className="text-center space-y-1.5">
+                <h1 className="text-lg font-semibold text-[var(--text)]">
+                  Audit Log Access
                 </h1>
-                <p className="text-xs text-[var(--text-dim)]">
-                  Enter administrative passcode to decrypt and inspect the live SHA-256 audit ledger.
+                <p className="text-xs text-[var(--text-dim)] leading-relaxed">
+                  Enter passcode to inspect audit logs, verify hash chain integrity, and review threat telemetry.
                 </p>
               </div>
 
-              {/* Requirement 1: Error message for wrong passcode and 429 */}
               {authError && (
                 <div
                   role="alert"
-                  className="p-3.5 bg-red-950/80 border border-red-700 text-red-200 text-xs rounded-xl flex items-center gap-2.5 shadow-md"
+                  className="p-3 bg-red-950/80 border border-red-700 text-red-200 text-xs rounded font-mono"
                 >
-                  <span className="text-red-400 text-base font-bold" aria-hidden="true">⚠️</span>
-                  <span className="font-medium leading-relaxed">{authError}</span>
+                  {authError}
                 </div>
               )}
 
               <form onSubmit={handleUnlock} className="space-y-4">
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="passcodeInput" className="hud-label text-slate-300">
-                      Dashboard Passcode
-                    </label>
-                    <span className="hud-label text-[10px] text-slate-500">
-                      Volatile Memory Only
-                    </span>
-                  </div>
+                  <label
+                    htmlFor="passcodeInput"
+                    className="text-xs text-[var(--text-dim)] block font-mono uppercase tracking-wider"
+                  >
+                    Passcode
+                  </label>
 
                   <div className="relative">
                     <input
@@ -438,7 +656,7 @@ export default function DashboardPage() {
                       value={passcode}
                       onChange={(e) => setPasscode(e.target.value)}
                       placeholder="Enter DASHBOARD_PASSCODE..."
-                      className="w-full bg-[rgba(4,11,20,0.9)] border border-[var(--panel-border)] rounded-xl pl-4 pr-11 py-2.5 text-sm font-mono text-[var(--text)] placeholder:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf] transition"
+                      className="w-full bg-[var(--bg)] border border-[var(--border)] rounded pl-3 pr-16 py-2.5 text-sm font-mono text-[var(--text)] placeholder:text-[var(--text-dim)]/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                       autoFocus
                       autoComplete="current-password"
                     />
@@ -446,38 +664,30 @@ export default function DashboardPage() {
                       type="button"
                       onClick={() => setShowPasscode(!showPasscode)}
                       aria-label={showPasscode ? 'Hide passcode' : 'Show passcode'}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-[var(--text-dim)] hover:text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf] rounded-lg text-sm"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 px-2.5 py-1 text-xs text-[var(--text-dim)] hover:text-[var(--text)] font-mono rounded hover:bg-[var(--surface-2)] transition"
                     >
-                      {showPasscode ? '🙈' : '👁️'}
+                      {showPasscode ? 'Hide' : 'Show'}
                     </button>
                   </div>
 
-                  <p className="text-[11px] text-[var(--text-dim)]">
-                    Credentials remain solely in React memory and are never persisted in localStorage or sessionStorage.
+                  <p className="text-[11px] text-[var(--text-dim)] font-mono">
+                    Passcode remains strictly in React memory and is never saved to localStorage.
                   </p>
                 </div>
 
                 <button
                   type="submit"
                   disabled={isLoading || !passcode.trim()}
-                  aria-label="Unlock Security Dashboard"
-                  className="w-full py-2.5 px-4 rounded-xl bg-[#2dd4bf] hover:bg-[#14b8a6] disabled:opacity-50 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(45,212,191,0.3)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className="btn-primary w-full disabled:opacity-50 h-10 text-xs font-semibold"
                 >
-                  {isLoading ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-slate-950/40 border-t-slate-950 rounded-full animate-spin" aria-hidden="true" />
-                      <span>Verifying Credentials...</span>
-                    </>
-                  ) : (
-                    'Unlock Dashboard'
-                  )}
+                  {isLoading ? 'Verifying...' : 'Unlock dashboard'}
                 </button>
               </form>
 
-              <div className="text-center pt-2 border-t border-[rgba(64,224,208,0.15)]">
+              <div className="text-center pt-3 border-t border-[var(--border)]">
                 <Link
                   href="/"
-                  className="text-xs text-[var(--text-dim)] hover:text-[#2dd4bf] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf] rounded px-2 py-1"
+                  className="text-xs text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors font-mono"
                 >
                   ← Back to Home
                 </Link>
@@ -489,79 +699,60 @@ export default function DashboardPage() {
     );
   }
 
-  // Real Status Calculations (Requirement 6: based on real checks only, never fake data)
-  const isGatewayOnline = Boolean(isAuthenticated && rows !== null);
-  const totalVaultedTokens = rows.reduce(
-    (acc, r) => (r.action === 'tokenize' || r.decision === 'sanitize' ? acc + 1 : acc),
-    0
-  );
-
   // =========================================================================
-  // 2. Main Dashboard (Authenticated View)
+  // Authenticated Dashboard
   // =========================================================================
   return (
-    <div className="min-h-screen bg-[var(--bg-0)] text-[var(--text)] grid-bg flex flex-col pb-16">
-      {/* Dashboard Top Header */}
-      <header className="border-b border-[var(--panel-border)] bg-[rgba(4,11,20,0.85)] backdrop-blur-md sticky top-0 z-30">
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex flex-col pb-16 transition-colors">
+      {/* Top Header */}
+      <header className="border-b border-[var(--border)] bg-[var(--surface)] sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <svg className="w-6 h-6 text-[#2dd4bf] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <path d="m9 12 2 2 4-4" />
-            </svg>
-            <div>
-              <h1 className="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
-                <span>Security Operations HUD</span>
-                <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-[rgba(45,212,191,0.12)] text-[#2dd4bf] border border-[rgba(45,212,191,0.3)]">
-                  SOC ACTIVE
-                </span>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-semibold text-[var(--text)]">
+                Cybersecurity Analytics Dashboard
               </h1>
-              <p className="text-[11px] text-[var(--text-dim)]">
-                Cryptographic SHA-256 audit chain verification, threat telemetry & policy governance.
-              </p>
+              <span className="hud-label text-[10px] text-[var(--accent)] bg-[var(--surface-2)] px-2 py-0.5 rounded border border-[var(--border)]">
+                IMMUTABLE_CHAIN
+              </span>
             </div>
+            <p className="text-xs text-[var(--text-dim)]">
+              Real-time threat surface analysis, cryptographic integrity, and compliance telemetry.
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Requirement 5: Verify Integrity button with loading state */}
-            <button
-              type="button"
-              onClick={handleVerifyChain}
-              disabled={isVerifying}
-              aria-label="Verify cryptographic hash chain integrity"
-              className="px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold bg-[rgba(10,28,44,0.85)] hover:bg-[rgba(45,212,191,0.12)] border border-[rgba(64,224,208,0.25)] hover:border-[#2dd4bf] text-slate-200 flex items-center gap-1.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
-              title="Recomputes cryptographic SHA-256 chain across every stored audit row"
-            >
-              {isVerifying ? (
-                <>
-                  <span className="w-3.5 h-3.5 border-2 border-[#2dd4bf]/40 border-t-[#2dd4bf] rounded-full animate-spin" aria-hidden="true" />
-                  <span>Verifying Chain...</span>
-                </>
-              ) : (
-                <>
-                  <span aria-hidden="true">🔗</span>
-                  <span>Verify Integrity</span>
-                </>
-              )}
-            </button>
-
-            {/* CSV Export Button (Requirement 7) */}
+            {/* Download CSV Button */}
             <button
               type="button"
               onClick={handleDownloadCsv}
               disabled={rows.length === 0}
               aria-label="Download audit logs as CSV"
-              className="px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold bg-[rgba(10,28,44,0.85)] hover:bg-[rgba(10,28,44,1)] border border-[var(--panel-border)] text-slate-200 flex items-center gap-1.5 transition disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
+              className="btn-secondary h-8 text-xs font-mono font-medium px-3 disabled:opacity-50 inline-flex items-center gap-1.5"
             >
-              <span aria-hidden="true">📥</span>
+              <svg
+                className="w-3.5 h-3.5 text-[var(--text-dim)]"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
               <span>Download CSV</span>
             </button>
 
             <Link
               href="/playground"
-              className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-[#2dd4bf] hover:bg-[#14b8a6] text-slate-950 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white shadow-sm"
+              className="btn-primary h-8 text-xs font-semibold px-3 inline-flex items-center gap-1"
             >
-              Playground →
+              <span>Playground</span>
+              <span>→</span>
             </Link>
 
             <button
@@ -572,9 +763,10 @@ export default function DashboardPage() {
                 setRows([]);
                 setAggregates(null);
                 setVerifyStatus(null);
+                setSelectedCategory(null);
               }}
               aria-label="Lock dashboard session"
-              className="px-3 py-1.5 rounded-lg text-xs font-mono text-[var(--text-dim)] hover:text-white transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
+              className="text-xs font-mono text-[var(--text-dim)] hover:text-[var(--text)] px-2.5 py-1 rounded border border-transparent hover:border-[var(--border)] transition"
             >
               Lock
             </button>
@@ -584,736 +776,1153 @@ export default function DashboardPage() {
 
       {/* Main Container */}
       <main className="max-w-7xl w-full mx-auto px-4 py-6 space-y-6 flex-1">
-        {/* Requirement 6: Real-Looking Live Status Strip (real checks only, never fake data) */}
-        <div className="hud-panel p-3 flex flex-wrap items-center justify-between gap-4 text-xs font-mono">
-          <div className="flex flex-wrap items-center gap-5">
-            {/* Gateway Active check */}
-            <div className="flex items-center gap-2">
-              <StatusDot
-                status={isGatewayOnline ? 'ok' : 'critical'}
-                showText={false}
-                size="sm"
-              />
-              <span className="text-[var(--text-dim)]">GATEWAY:</span>
-              <span className={isGatewayOnline ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>
-                {isGatewayOnline ? 'ACTIVE (HTTP 200)' : 'UNREACHABLE'}
-              </span>
-            </div>
-
-            {/* Vault Active check */}
-            <div className="flex items-center gap-2">
-              <StatusDot
-                status={isGatewayOnline ? 'active' : 'idle'}
-                showText={false}
-                size="sm"
-              />
-              <span className="text-[var(--text-dim)]">AES-256 VAULT:</span>
-              <span className="text-[#2dd4bf] font-bold">
-                {isGatewayOnline ? `OPERATIONAL (${totalVaultedTokens} TOKENIZED)` : 'STANDBY'}
-              </span>
-            </div>
-
-            {/* Audit Chain Verification check */}
-            <div className="flex items-center gap-2">
-              <StatusDot
-                status={
-                  verifyStatus === null
-                    ? 'idle'
-                    : verifyStatus.valid
-                    ? 'ok'
-                    : 'critical'
-                }
-                showText={false}
-                size="sm"
-              />
-              <span className="text-[var(--text-dim)]">AUDIT CHAIN:</span>
-              <span
-                className={
-                  verifyStatus === null
-                    ? 'text-slate-400'
-                    : verifyStatus.valid
-                    ? 'text-emerald-400 font-bold'
-                    : 'text-red-400 font-bold'
-                }
-              >
-                {verifyStatus === null
-                  ? 'UNVERIFIED (CLICK VERIFY)'
-                  : verifyStatus.valid
-                  ? `VERIFIED (${verifyStatus.checked} BLOCKS)`
-                  : `SEVERED AT ID #${verifyStatus.brokenAtId}`}
-              </span>
-            </div>
-          </div>
-
-          <div className="text-[10px] text-slate-500 font-mono">
-            HOSTED RUNTIME: NODEJS SERVERLESS
-          </div>
-        </div>
-
-        {/* Requirement 5: Integrity Result Banner */}
-        {verifyStatus && (
+        {/* Error Banner with Retry Button */}
+        {fetchError && (
           <div
-            role="status"
-            aria-live="polite"
-            className={`p-4 rounded-xl border text-sm flex items-center justify-between shadow-xl transition ${
-              verifyStatus.valid
-                ? 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
-                : 'bg-red-950/80 border-red-600 text-red-200'
-            }`}
+            role="alert"
+            className="p-3.5 rounded-lg bg-red-950/80 border border-red-700 text-red-200 text-xs font-mono flex items-center justify-between gap-4"
           >
-            <div className="flex items-center gap-3">
-              <span className="text-xl" aria-hidden="true">
-                {verifyStatus.valid ? '✅' : '🚨'}
-              </span>
-              <div>
-                <p className="font-extrabold text-sm sm:text-base">
-                  {verifyStatus.valid
-                    ? `Chain valid, ${verifyStatus.checked ?? 0} entries checked`
-                    : `Tampering detected at entry ID ${verifyStatus.brokenAtId ?? 'unknown'}`}
-                </p>
-                <p className="text-xs opacity-90 mt-0.5">
-                  {verifyStatus.valid
-                    ? 'Every cryptographic hash and prev_hash link is mathematically intact from GENESIS.'
-                    : 'A hash mismatch was detected. Records in the audit ledger may have been modified or deleted.'}
-                </p>
-              </div>
+            <div className="flex items-center gap-2">
+              <svg
+                className="w-4 h-4 text-red-400 flex-shrink-0"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span>{fetchError}</span>
             </div>
-
             <button
               type="button"
-              onClick={() => setVerifyStatus(null)}
-              aria-label="Dismiss integrity notification"
-              className="text-xs font-mono px-2 py-1 rounded hover:bg-black/20 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+              onClick={() => fetchLogs(passcode)}
+              className="px-3 py-1 rounded bg-red-900/60 hover:bg-red-800/80 border border-red-600 text-white font-mono text-xs transition"
             >
-              ✕
+              Retry
             </button>
           </div>
         )}
 
-        {/* Requirement 2: Top Row of Stat Cards (Total scans, Blocked prompts, Injection attempts, Average risk with RiskGauge) */}
-        <section
-          aria-labelledby="metrics-heading"
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
-        >
-          <h2 id="metrics-heading" className="sr-only">Audit Telemetry Metrics</h2>
-
-          {/* Card 1: Total scans */}
-          <HudPanel title="Total scans" tag="SCAN_VOLUME" brackets={true}>
-            <div className="space-y-2">
-              <div className="hud-stat">
-                {aggregates ? aggregates.totalScans.toLocaleString() : '—'}
-              </div>
-              <p className="text-[11px] text-[var(--text-dim)]">
-                {rows.length} records queried in current filter view
+        {/* Loading Skeletons */}
+        {isLoading && !aggregates ? (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-4 h-36 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+              <div className="lg:col-span-4 h-36 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+              <div className="lg:col-span-4 lg:row-span-2 h-80 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+              <div className="lg:col-span-8 h-64 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="h-48 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+              <div className="h-48 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+              <div className="h-48 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg animate-pulse" />
+            </div>
+          </div>
+        ) : !aggregates || aggregates.totalScans === 0 ? (
+          /* Empty State */
+          <div className="p-12 text-center rounded-lg bg-[var(--surface)] border border-[var(--border)] max-w-xl mx-auto space-y-4 my-8">
+            <div className="mx-auto w-12 h-12 rounded-lg bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-center text-[var(--accent)]">
+              <svg
+                className="w-6 h-6"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </div>
+            <div className="space-y-1.5">
+              <h2 className="text-base font-semibold text-[var(--text)]">
+                No scans yet, try the Playground
+              </h2>
+              <p className="text-xs text-[var(--text-dim)] leading-relaxed">
+                There are currently no audit telemetry records in the ledger. Run an interactive prompt scan in the Playground to generate live security records.
               </p>
             </div>
-          </HudPanel>
-
-          {/* Card 2: Blocked prompts */}
-          <HudPanel title="Blocked prompts" tag="POLICY_VIOLATIONS" brackets={true}>
-            <div className="space-y-2">
-              <div className="hud-stat text-[#ef4444]">
-                {aggregates ? aggregates.blockedCount.toLocaleString() : '—'}
-              </div>
-              <p className="text-[11px] text-[var(--text-dim)]">
-                {aggregates && aggregates.totalScans > 0
-                  ? `${((aggregates.blockedCount / aggregates.totalScans) * 100).toFixed(1)}% of all traffic rejected`
-                  : 'Zero violations detected'}
-              </p>
+            <div className="pt-2">
+              <Link
+                href="/playground"
+                className="btn-primary inline-flex items-center px-4 py-2 text-xs font-semibold"
+              >
+                Open Playground →
+              </Link>
             </div>
-          </HudPanel>
-
-          {/* Card 3: Injection attempts */}
-          <HudPanel title="Injection attempts" tag="THREAT_VECTORS" brackets={true}>
-            <div className="space-y-2">
-              <div className="hud-stat text-[#fbbf24]">
-                {aggregates ? aggregates.injectionCount.toLocaleString() : '—'}
-              </div>
-              <p className="text-[11px] text-[var(--text-dim)]">
-                {aggregates && aggregates.totalScans > 0
-                  ? `${((aggregates.injectionCount / aggregates.totalScans) * 100).toFixed(1)}% adversarial rate`
-                  : 'Zero jailbreaks detected'}
-              </p>
-            </div>
-          </HudPanel>
-
-          {/* Card 4: Average risk (Equipped with RiskGauge) */}
-          <HudPanel title="Average risk" tag="RADAR_INDEX" brackets={true}>
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="hud-stat text-[#2dd4bf]">
-                  {aggregates ? aggregates.averageRisk : '0'}
-                  <span className="text-[var(--text-dim)] text-xs font-normal"> / 100</span>
-                </div>
-                <p className="text-[11px] text-[var(--text-dim)]">
-                  Composite severity score
-                </p>
-              </div>
-
-              {/* Requirement 2: RiskGauge for Average Risk */}
-              <div className="flex-shrink-0">
-                <RiskGauge
-                  score={aggregates ? aggregates.averageRisk : 0}
-                  size={95}
-                  strokeWidth={7}
-                  showLabel={false}
-                />
-              </div>
-            </div>
-          </HudPanel>
-        </section>
-
-        {/* Requirement 3: Charts (Transparent backgrounds, thin grid lines, token colors, text summaries) */}
-        <section
-          aria-labelledby="charts-heading"
-          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
-        >
-          <h2 id="charts-heading" className="sr-only">Threat and Policy Analytics Charts</h2>
-
-          {/* Chart 1: Detections by Category */}
-          <HudPanel title="Detections by Category" tag="CATEGORY_HISTOGRAM" brackets={true}>
-            <div className="space-y-3">
-              <div className="min-h-[220px]">
-                {categoryChartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart
-                      data={categoryChartData}
-                      margin={{ top: 10, right: 10, left: -20, bottom: 25 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(64, 224, 208, 0.12)" />
-                      <XAxis
-                        dataKey="category"
-                        stroke="#9bb3bf"
-                        fontSize={10}
-                        angle={-25}
-                        textAnchor="end"
-                        interval={0}
-                        tickLine={{ stroke: 'rgba(64, 224, 208, 0.2)' }}
-                        axisLine={{ stroke: 'rgba(64, 224, 208, 0.25)' }}
-                      />
-                      <YAxis
-                        stroke="#9bb3bf"
-                        fontSize={10}
-                        tickLine={{ stroke: 'rgba(64, 224, 208, 0.2)' }}
-                        axisLine={{ stroke: 'rgba(64, 224, 208, 0.25)' }}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#07131f',
-                          borderColor: 'rgba(64, 224, 208, 0.3)',
-                          borderRadius: '8px',
-                          fontSize: '11px',
-                          color: '#e6f1f5',
-                          boxShadow: '0 8px 24px rgba(4, 11, 20, 0.8)',
-                        }}
-                        itemStyle={{ color: '#e6f1f5' }}
-                        labelStyle={{ color: '#2dd4bf', fontWeight: 600 }}
-                      />
-                      <Bar dataKey="count" fill="#2dd4bf" radius={[3, 3, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-[220px] flex items-center justify-center text-xs text-[var(--text-dim)]">
-                    No categorical findings recorded in current filter.
+          </div>
+        ) : (
+          /* 12-Column Desktop Grid Layout (Two columns on tablet, stacked on mobile) */
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6 items-stretch">
+              {/* TOP ROW - Left Card: Total scans (lg:col-span-4) */}
+              <div
+                className="lg:col-span-4 hud-stagger-card"
+                style={{ animationDelay: '0ms' }}
+              >
+                <HudPanel title="Total scans" tag="ALL_TIME">
+                  <div className="pt-1 space-y-2">
+                    <div className="text-3xl sm:text-4xl font-mono font-semibold text-[var(--text)]">
+                      <CountUp value={aggregates.totalScans} />
+                    </div>
+                    <div className="text-xs text-[var(--text-dim)] font-mono flex items-center gap-1.5 pt-1 border-t border-[var(--border)]">
+                      <span className="text-[var(--accent)] font-semibold">●</span>
+                      <span>
+                        last 7 days:{' '}
+                        <strong className="text-[var(--text)]">
+                          {aggregates.scansLast7Days.toLocaleString()}
+                        </strong>
+                      </span>
+                    </div>
                   </div>
-                )}
+                </HudPanel>
               </div>
 
-              {/* Requirement 3: One-line text summary under chart */}
-              <p className="text-[11px] text-[var(--text-dim)] pt-2 border-t border-[rgba(64,224,208,0.15)] leading-relaxed">
-                <span className="font-semibold text-slate-200">Summary: </span>
-                {categoryChartData.length > 0 ? (
-                  <span>
-                    {categoryChartData.length} distinct {categoryChartData.length === 1 ? 'type' : 'types'} identified. Highest frequency: {categoryChartData.slice().sort((a, b) => b.count - a.count)[0].category} ({categoryChartData.slice().sort((a, b) => b.count - a.count)[0].count} events).
-                  </span>
-                ) : (
-                  <span>No categorical entity detections recorded.</span>
-                )}
-              </p>
-            </div>
-          </HudPanel>
+              {/* TOP ROW - Middle Card: Average risk (lg:col-span-4) */}
+              <div
+                className="lg:col-span-4 hud-stagger-card"
+                style={{ animationDelay: '60ms' }}
+              >
+                <HudPanel title="Average risk" tag="RISK_SCORE">
+                  <div className="pt-1 flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-3xl sm:text-4xl font-mono font-semibold text-[var(--accent)]">
+                          <CountUp value={Math.round(aggregates.averageRisk)} />
+                        </span>
+                        <span className="text-xs text-[var(--text-dim)] font-mono">/ 100</span>
+                      </div>
+                      <div className="text-xs font-mono font-semibold" style={{ color: avgRiskSeverity.color }}>
+                        {avgRiskSeverity.label} Risk
+                      </div>
+                      <div className="text-[11px] text-[var(--text-dim)] font-mono pt-1">
+                        Last updated: {formatLastUpdated(aggregates.latestTimestamp)}
+                      </div>
+                    </div>
 
-          {/* Chart 2: Policy Decisions Breakdown */}
-          <HudPanel title="Policy Decisions Breakdown" tag="RESOLUTION_RATIO" brackets={true}>
-            <div className="space-y-3">
-              <div className="min-h-[220px]">
-                {decisionChartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart
-                      data={decisionChartData}
-                      margin={{ top: 10, right: 10, left: -20, bottom: 15 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(64, 224, 208, 0.12)" />
-                      <XAxis
-                        dataKey="decision"
-                        stroke="#9bb3bf"
-                        fontSize={10}
-                        tickLine={{ stroke: 'rgba(64, 224, 208, 0.2)' }}
-                        axisLine={{ stroke: 'rgba(64, 224, 208, 0.25)' }}
+                    <div className="flex-shrink-0">
+                      <RiskGauge
+                        score={Math.round(aggregates.averageRisk)}
+                        size={82}
+                        strokeWidth={7}
                       />
-                      <YAxis
-                        stroke="#9bb3bf"
-                        fontSize={10}
-                        tickLine={{ stroke: 'rgba(64, 224, 208, 0.2)' }}
-                        axisLine={{ stroke: 'rgba(64, 224, 208, 0.25)' }}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#07131f',
-                          borderColor: 'rgba(64, 224, 208, 0.3)',
-                          borderRadius: '8px',
-                          fontSize: '11px',
-                          color: '#e6f1f5',
-                          boxShadow: '0 8px 24px rgba(4, 11, 20, 0.8)',
-                        }}
-                        itemStyle={{ color: '#e6f1f5' }}
-                        labelStyle={{ color: '#2dd4bf', fontWeight: 600 }}
-                      />
-                      <Bar dataKey="count" radius={[3, 3, 0, 0]}>
-                        {decisionChartData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={getDecisionBarColor(entry.decision)} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-[220px] flex items-center justify-center text-xs text-[var(--text-dim)]">
-                    No decisions recorded yet.
+                    </div>
                   </div>
-                )}
+                </HudPanel>
               </div>
 
-              {/* Requirement 3: One-line text summary under chart */}
-              <p className="text-[11px] text-[var(--text-dim)] pt-2 border-t border-[rgba(64,224,208,0.15)] leading-relaxed">
-                <span className="font-semibold text-slate-200">Summary: </span>
-                {decisionChartData.length > 0 ? (
-                  <span>
-                    Decisions logged: {decisionChartData.map((d) => `${d.decision}: ${d.count}`).join(', ')}.
-                  </span>
-                ) : (
-                  <span>No policy decision events logged yet.</span>
-                )}
-              </p>
-            </div>
-          </HudPanel>
-
-          {/* Chart 3: Daily Average Risk Trend */}
-          <HudPanel title="Daily Average Risk Trend" tag="TIME_SERIES" brackets={true}>
-            <div className="space-y-3">
-              <div className="min-h-[220px]">
-                {aggregates && aggregates.riskOverTime.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <LineChart
-                      data={aggregates.riskOverTime}
-                      margin={{ top: 10, right: 10, left: -20, bottom: 15 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(64, 224, 208, 0.12)" />
-                      <XAxis
-                        dataKey="date"
-                        stroke="#9bb3bf"
-                        fontSize={10}
-                        tickLine={{ stroke: 'rgba(64, 224, 208, 0.2)' }}
-                        axisLine={{ stroke: 'rgba(64, 224, 208, 0.25)' }}
-                      />
-                      <YAxis
-                        domain={[0, 100]}
-                        stroke="#9bb3bf"
-                        fontSize={10}
-                        tickLine={{ stroke: 'rgba(64, 224, 208, 0.2)' }}
-                        axisLine={{ stroke: 'rgba(64, 224, 208, 0.25)' }}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#07131f',
-                          borderColor: 'rgba(64, 224, 208, 0.3)',
-                          borderRadius: '8px',
-                          fontSize: '11px',
-                          color: '#e6f1f5',
-                          boxShadow: '0 8px 24px rgba(4, 11, 20, 0.8)',
-                        }}
-                        itemStyle={{ color: '#e6f1f5' }}
-                        labelStyle={{ color: '#fbbf24', fontWeight: 600 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="averageRisk"
-                        stroke="#fbbf24"
-                        strokeWidth={2}
-                        dot={{ r: 3.5, fill: '#fbbf24' }}
-                        activeDot={{ r: 5 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-[220px] flex items-center justify-center text-xs text-[var(--text-dim)]">
-                    No chronological risk points to plot.
-                  </div>
-                )}
-              </div>
-
-              {/* Requirement 3: One-line text summary under chart */}
-              <p className="text-[11px] text-[var(--text-dim)] pt-2 border-t border-[rgba(64,224,208,0.15)] leading-relaxed">
-                <span className="font-semibold text-slate-200">Summary: </span>
-                {aggregates && aggregates.riskOverTime.length > 0 ? (
-                  <span>
-                    Plotted across {aggregates.riskOverTime.length} {aggregates.riskOverTime.length === 1 ? 'day' : 'days'}. Overall average risk: {aggregates.averageRisk} / 100.
-                  </span>
-                ) : (
-                  <span>No chronological trend points logged yet.</span>
-                )}
-              </p>
-            </div>
-          </HudPanel>
-        </section>
-
-        {/* Requirement 4: Logs Table in a hud-panel with sticky header & filters */}
-        <HudPanel
-          title="Cryptographic Audit Trail"
-          tag="SHA256_LEDGER"
-          brackets={true}
-          headerAction={
-            <div className="hud-label text-slate-300">
-              Showing <span className="text-[#2dd4bf] font-bold">{rows.length}</span> {rows.length === 1 ? 'record' : 'records'}
-              {aggregates && aggregates.totalScans > rows.length && (
-                <span className="text-[var(--text-dim)]"> (of {aggregates.totalScans})</span>
-              )}
-            </div>
-          }
-        >
-          <div className="space-y-4">
-            {/* Filter Bar (Date Range, Decision, Level, Clear Filters) */}
-            <div className="p-3 bg-[rgba(4,11,20,0.7)] border border-[rgba(64,224,208,0.18)] rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Date Range: From */}
-                <div className="flex items-center gap-1.5">
-                  <label htmlFor="fromDateInput" className="hud-label text-[10px]">
-                    From:
-                  </label>
-                  <input
-                    id="fromDateInput"
-                    type="date"
-                    value={fromDate}
-                    onChange={(e) => setFromDate(e.target.value)}
-                    className="bg-[rgba(10,28,44,0.9)] border border-[var(--panel-border)] text-slate-200 rounded-lg px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                  />
-                </div>
-
-                {/* Date Range: To */}
-                <div className="flex items-center gap-1.5">
-                  <label htmlFor="toDateInput" className="hud-label text-[10px]">
-                    To:
-                  </label>
-                  <input
-                    id="toDateInput"
-                    type="date"
-                    value={toDate}
-                    onChange={(e) => setToDate(e.target.value)}
-                    className="bg-[rgba(10,28,44,0.9)] border border-[var(--panel-border)] text-slate-200 rounded-lg px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                  />
-                </div>
-
-                {/* Decision Filter */}
-                <div className="flex items-center gap-1.5">
-                  <label htmlFor="decisionSelect" className="hud-label text-[10px]">
-                    Decision:
-                  </label>
-                  <select
-                    id="decisionSelect"
-                    value={filterDecision}
-                    onChange={(e) => setFilterDecision(e.target.value)}
-                    className="bg-[rgba(10,28,44,0.9)] border border-[var(--panel-border)] text-slate-200 rounded-lg px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                  >
-                    <option value="all">All Decisions</option>
-                    <option value="allow">Allow</option>
-                    <option value="sanitize">Sanitize</option>
-                    <option value="review">Review</option>
-                    <option value="block">Block</option>
-                  </select>
-                </div>
-
-                {/* Risk Level Filter */}
-                <div className="flex items-center gap-1.5">
-                  <label htmlFor="levelSelect" className="hud-label text-[10px]">
-                    Risk:
-                  </label>
-                  <select
-                    id="levelSelect"
-                    value={filterLevel}
-                    onChange={(e) => setFilterLevel(e.target.value)}
-                    className="bg-[rgba(10,28,44,0.9)] border border-[var(--panel-border)] text-slate-200 rounded-lg px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                  >
-                    <option value="all">All Levels</option>
-                    <option value="low">Low (0-29)</option>
-                    <option value="medium">Medium (30-59)</option>
-                    <option value="high">High (60-84)</option>
-                    <option value="critical">Critical (85+)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Clear Filters Button & Limit Selector */}
-              <div className="flex items-center gap-2">
-                {(fromDate || toDate || filterDecision !== 'all' || filterAction !== 'all' || filterLevel !== 'all') && (
-                  <button
-                    type="button"
-                    onClick={handleClearFilters}
-                    aria-label="Clear active filters"
-                    className="px-2.5 py-1 rounded-lg bg-[rgba(10,28,44,0.85)] hover:bg-[rgba(45,212,191,0.15)] border border-[var(--panel-border)] text-slate-300 hover:text-white transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                  >
-                    Clear Filters ✕
-                  </button>
-                )}
-
-                <select
-                  aria-label="Limit results fetched from server"
-                  value={limit}
-                  onChange={(e) => setLimit(Number(e.target.value))}
-                  className="bg-[rgba(10,28,44,0.9)] border border-[var(--panel-border)] text-slate-200 rounded-lg px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                >
-                  <option value={50}>Limit 50</option>
-                  <option value={100}>Limit 100</option>
-                  <option value={200}>Limit 200</option>
-                  <option value={500}>Limit 500</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Table Container with Sticky Header & Mobile Horizontal Scroll (Requirement 4 & 8) */}
-            <div className="overflow-x-auto w-full border border-[var(--panel-border)] rounded-xl max-h-[560px]">
-              <table className="w-full text-left text-xs border-collapse">
-                {/* Sticky Table Header */}
-                <thead className="sticky top-0 bg-[rgba(7,19,31,0.95)] backdrop-blur-md border-b border-[rgba(64,224,208,0.25)] text-[var(--text-dim)] font-mono z-10 shadow-sm">
-                  <tr>
-                    <th scope="col" className="py-2.5 px-3 w-8">
-                      <span className="sr-only">Expand</span>
-                    </th>
-                    <th scope="col" className="py-2.5 px-3 whitespace-nowrap">Timestamp</th>
-                    <th scope="col" className="py-2.5 px-3">Action</th>
-                    <th scope="col" className="py-2.5 px-3">Decision</th>
-                    <th scope="col" className="py-2.5 px-3">Risk Level</th>
-                    <th scope="col" className="py-2.5 px-3">Categories</th>
-                    <th scope="col" className="py-2.5 px-3">Sanitized Prompt</th>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-[rgba(64,224,208,0.1)] text-slate-200">
-                  {paginatedRows.length > 0 ? (
-                    paginatedRows.map((row) => {
-                      const isExpanded = expandedRowId === row.id;
-                      const shortenedPrompt =
-                        row.masked_prompt && row.masked_prompt.length > 70
-                          ? row.masked_prompt.slice(0, 70) + '...'
-                          : row.masked_prompt || '';
-
-                      return (
-                        <React.Fragment key={row.id}>
-                          <tr
-                            onClick={() => setExpandedRowId(isExpanded ? null : row.id)}
-                            className={`hover:bg-[rgba(45,212,191,0.05)] cursor-pointer transition ${
-                              isExpanded ? 'bg-[rgba(45,212,191,0.08)] border-l-2 border-[#2dd4bf]' : ''
-                            }`}
+              {/* TOP & SECOND ROW - Right Column: Data at risk (lg:col-span-4 lg:row-span-2) */}
+              <div
+                className="lg:col-span-4 lg:row-span-2 hud-stagger-card flex flex-col"
+                style={{ animationDelay: '120ms' }}
+              >
+                <HudPanel title="Data at risk" tag="THREAT_SURFACE">
+                  <div className="pt-1 space-y-4 flex flex-col h-full">
+                    <div>
+                      <div className="flex items-center justify-between text-xs text-[var(--text-dim)] font-mono pb-1">
+                        <span>Top detected categories</span>
+                        {selectedCategory && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCategory(null)}
+                            className="text-[var(--accent)] hover:underline text-[11px]"
                           >
-                            {/* Expand button */}
-                            <td className="py-2.5 px-3 text-slate-400 text-center font-mono text-[11px]">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setExpandedRowId(isExpanded ? null : row.id);
-                                }}
-                                aria-expanded={isExpanded}
-                                aria-label={`Toggle details for audit entry ${row.id}`}
-                                className="p-1 hover:text-[#2dd4bf] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                              >
-                                {isExpanded ? '▼' : '▶'}
-                              </button>
-                            </td>
+                            Reset filter
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[var(--text-dim)]">
+                        Click a category to filter the audit log below.
+                      </p>
+                    </div>
 
-                            {/* Timestamp */}
-                            <td className="py-2.5 px-3 font-mono text-[var(--text-dim)] whitespace-nowrap text-[11px]">
-                              {row.created_at ? new Date(row.created_at).toLocaleString() : '—'}
-                            </td>
+                    {/* Scrollable list of categories */}
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1" tabIndex={0} aria-label="Top detected categories list">
+                      {aggregates.categoryDetails && aggregates.categoryDetails.length > 0 ? (
+                        aggregates.categoryDetails.map((cat) => {
+                          const isSelected = selectedCategory === cat.category;
+                          return (
+                            <button
+                              key={cat.category}
+                              type="button"
+                              onClick={() =>
+                                setSelectedCategory(isSelected ? null : cat.category)
+                              }
+                              className={`w-full text-left p-2 rounded border transition flex items-center justify-between gap-2 text-xs font-mono ${
+                                isSelected
+                                  ? 'border-[var(--accent)] bg-[var(--accent)]/15 ring-1 ring-[var(--accent)] text-[var(--text)]'
+                                  : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--accent)]/60 text-[var(--text-dim)]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-semibold text-[var(--text)] truncate">
+                                  {cat.category}
+                                </span>
+                                <span className="text-[10px] opacity-80">
+                                  ({cat.count})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <span className="text-[10px] text-[var(--critical)]">
+                                  {cat.blockedCount} blk
+                                </span>
+                                {renderRiskBadge(cat.averageRisk)}
+                              </div>
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <div className="text-xs text-[var(--text-dim)] py-3 text-center font-mono">
+                          No category detections recorded.
+                        </div>
+                      )}
+                    </div>
 
-                            {/* Action */}
-                            <td className="py-2.5 px-3">
-                              <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-[rgba(4,11,20,0.85)] border border-[rgba(64,224,208,0.2)]">
-                                {row.action}
-                              </span>
-                            </td>
+                    {/* Sub-list: Recent flagged scans (Last 8) - NEVER leaks prompt text, user id, or IP */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-2 flex-1">
+                      <div className="text-[11px] font-mono font-semibold text-[var(--text-dim)] uppercase tracking-wider flex items-center justify-between">
+                        <span>Recent flagged scans (Last 8)</span>
+                        <span className="text-[10px] text-[var(--text-dim)]">Metadata only</span>
+                      </div>
 
-                            {/* Decision */}
-                            <td className="py-2.5 px-3">
-                              {renderDecisionBadge(row.decision)}
-                            </td>
-
-                            {/* Risk Badge with Icons (Requirement 4) */}
-                            <td className="py-2.5 px-3 whitespace-nowrap">
-                              {renderRiskBadge(row.risk_score)}
-                            </td>
-
-                            {/* Categories */}
-                            <td className="py-2.5 px-3">
-                              {Array.isArray(row.categories) && row.categories.length > 0 ? (
-                                <div className="flex flex-wrap gap-1">
-                                  {row.categories.map((c, i) => (
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 font-mono text-[11px]" tabIndex={0} aria-label="Recent flagged scans list">
+                        {aggregates.recentFlaggedScans && aggregates.recentFlaggedScans.length > 0 ? (
+                          aggregates.recentFlaggedScans.map((scan, i) => (
+                            <div
+                              key={i}
+                              className="p-1.5 rounded bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-between gap-2"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">
+                                  {formatRelativeTime(scan.createdAt)}
+                                </span>
+                                <div className="flex flex-wrap gap-1 truncate">
+                                  {scan.categories.map((c, ci) => (
                                     <span
-                                      key={i}
-                                      className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[rgba(4,11,20,0.85)] text-slate-300 border border-[rgba(64,224,208,0.2)]"
+                                      key={ci}
+                                      className="px-1 py-0.2 rounded text-[9px] bg-[var(--bg)] border border-[var(--border)] text-[var(--text-dim)]"
                                     >
                                       {c}
                                     </span>
                                   ))}
                                 </div>
-                              ) : (
-                                <span className="text-slate-600">—</span>
-                              )}
-                            </td>
-
-                            {/* Shortened Prompt Text with Tooltip */}
-                            <td
-                              className="py-2.5 px-3 font-mono text-slate-300 text-xs max-w-xs truncate"
-                              title={row.masked_prompt}
-                            >
-                              {shortenedPrompt}
-                            </td>
-                          </tr>
-
-                          {/* Expandable Row (Requirement 4 & 7: Plain text only) */}
-                          {isExpanded && (
-                            <tr className="bg-[rgba(4,11,20,0.9)] border-b border-[rgba(64,224,208,0.18)]">
-                              <td colSpan={7} className="p-4 space-y-3">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                                  {/* Sanitized Prompt Box */}
-                                  <div className="space-y-1">
-                                    <div className="hud-label text-[10px]">
-                                      Full Sanitized Prompt (Plain Text):
-                                    </div>
-                                    <div className="p-3 bg-[rgba(10,28,44,0.9)] border border-[rgba(64,224,208,0.2)] rounded-lg font-mono text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
-                                      {row.masked_prompt}
-                                    </div>
-                                  </div>
-
-                                  {/* Cryptographic Hashes */}
-                                  <div className="space-y-2.5">
-                                    <div>
-                                      <div className="flex items-center justify-between hud-label text-[10px]">
-                                        <span>Entry SHA-256 Hash:</span>
-                                        <button
-                                          type="button"
-                                          onClick={() => handleCopyHash(row.id, row.hash)}
-                                          aria-label="Copy entry SHA-256 hash"
-                                          className="text-[#2dd4bf] hover:underline font-mono text-[10px]"
-                                        >
-                                          {copiedHashId === row.id ? '✓ Copied' : 'Copy'}
-                                        </button>
-                                      </div>
-                                      <code className="block p-2 bg-[rgba(10,28,44,0.9)] border border-[rgba(64,224,208,0.2)] rounded font-mono text-[11px] text-[#2dd4bf] break-all select-all mt-1">
-                                        {row.hash}
-                                      </code>
-                                    </div>
-
-                                    <div>
-                                      <div className="hud-label text-[10px]">
-                                        Previous Link (prev_hash):
-                                      </div>
-                                      <code className="block p-2 bg-[rgba(10,28,44,0.9)] border border-[rgba(64,224,208,0.2)] rounded font-mono text-[11px] text-slate-400 break-all select-all mt-1">
-                                        {row.prev_hash}
-                                      </code>
-                                    </div>
-
-                                    <div className="flex items-center gap-4 text-[10px] text-[var(--text-dim)] font-mono pt-1">
-                                      <span>LEDGER_ID: #{row.id}</span>
-                                      <span>AUTH_USER: {row.user_id || 'anonymous'}</span>
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })
-                  ) : (
-                    /* Requirement 4: Empty State with link to Playground */
-                    <tr>
-                      <td colSpan={7} className="py-12 px-4 text-center">
-                        <div className="max-w-md mx-auto space-y-3">
-                          <div className="text-3xl text-[#2dd4bf]" aria-hidden="true">🛡️</div>
-                          <h4 className="text-sm font-bold text-white font-mono">
-                            No scans yet, try the Playground
-                          </h4>
-                          <p className="text-xs text-[var(--text-dim)] leading-relaxed">
-                            No audit telemetry matches your current filter criteria. Run an inspection in the playground sandbox to generate cryptographic audit records.
-                          </p>
-                          <div className="pt-2">
-                            <Link
-                              href="/playground"
-                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#2dd4bf] hover:bg-[#14b8a6] text-slate-950 text-xs font-bold shadow-[0_0_15px_rgba(45,212,191,0.25)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                            >
-                              <span>🚀</span>
-                              <span>Open Playground</span>
-                            </Link>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                {renderDecisionBadge(scan.decision)}
+                                {renderRiskBadge(scan.riskScore)}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-xs text-[var(--text-dim)] py-2 text-center font-mono">
+                            No flagged scans in current dataset.
                           </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </HudPanel>
+              </div>
+
+              {/* SECOND ROW - Left Two-Thirds: Risk trends (lg:col-span-8) */}
+              <div
+                className="lg:col-span-8 hud-stagger-card"
+                style={{ animationDelay: '180ms' }}
+              >
+                <HudPanel title="Risk trends" tag="DAILY_AVERAGE">
+                  <div className="pt-1 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-sm font-semibold text-[var(--text)]">
+                          Chronological composite prompt risk
+                        </h2>
+                        <p className="text-xs text-[var(--text-dim)]">
+                          Daily composite risk severity tracking with real-time scan volume
+                        </p>
+                      </div>
+
+                      {/* Range toggle 7 days, 30 days, All */}
+                      <div
+                        role="group"
+                        aria-label="Risk trend time range selector"
+                        className="inline-flex rounded border border-[var(--border)] bg-[var(--surface-2)] p-0.5 text-xs font-mono"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setTrendRange('7d')}
+                          className={`px-2.5 py-0.5 rounded transition ${
+                            trendRange === '7d'
+                              ? 'bg-[var(--accent)] text-[var(--bg)] font-semibold'
+                              : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+                          }`}
+                        >
+                          7 days
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTrendRange('30d')}
+                          className={`px-2.5 py-0.5 rounded transition ${
+                            trendRange === '30d'
+                              ? 'bg-[var(--accent)] text-[var(--bg)] font-semibold'
+                              : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+                          }`}
+                        >
+                          30 days
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTrendRange('all')}
+                          className={`px-2.5 py-0.5 rounded transition ${
+                            trendRange === 'all'
+                              ? 'bg-[var(--accent)] text-[var(--bg)] font-semibold'
+                              : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+                          }`}
+                        >
+                          All
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="min-h-[220px]">
+                      {filteredRiskTrendData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={220}>
+                          <LineChart
+                            data={filteredRiskTrendData}
+                            margin={{ top: 20, right: 20, left: -20, bottom: 20 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+                            <XAxis
+                              dataKey="date"
+                              stroke={chartColors.text}
+                              fontSize={11}
+                              tickLine={{ stroke: chartColors.grid }}
+                              axisLine={{ stroke: chartColors.grid }}
+                              label={{
+                                value: 'Date',
+                                position: 'insideBottom',
+                                offset: -12,
+                                fill: chartColors.text,
+                                fontSize: 10,
+                              }}
+                            />
+                            <YAxis
+                              domain={[0, 100]}
+                              stroke={chartColors.text}
+                              fontSize={11}
+                              tickLine={{ stroke: chartColors.grid }}
+                              axisLine={{ stroke: chartColors.grid }}
+                              label={{
+                                value: 'Risk (0-100)',
+                                angle: -90,
+                                position: 'insideLeft',
+                                offset: 25,
+                                fill: chartColors.text,
+                                fontSize: 10,
+                              }}
+                            />
+                            <Tooltip
+                              content={({ active, payload }) => {
+                                if (active && payload && payload.length) {
+                                  const item = payload[0].payload;
+                                  return (
+                                    <div
+                                      style={{
+                                        backgroundColor: chartColors.tooltipBg,
+                                        borderColor: chartColors.tooltipBorder,
+                                      }}
+                                      className="p-2 border rounded shadow text-xs font-mono space-y-1"
+                                    >
+                                      <div className="font-semibold text-[var(--accent)]">
+                                        Date: {item.date}
+                                      </div>
+                                      <div className="text-[var(--text)]">
+                                        Average risk: <strong className="text-[var(--warn)]">{item.averageRisk}</strong> / 100
+                                      </div>
+                                      <div className="text-[var(--text-dim)]">
+                                        Scans: {item.count}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              }}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="averageRisk"
+                              stroke={chartColors.warn}
+                              strokeWidth={2}
+                              isAnimationActive={!hasAnimatedCharts}
+                              animationDuration={800}
+                              dot={(props: { cx?: number; cy?: number; index?: number; payload?: { averageRisk: number } }) => {
+                                const { cx = 0, cy = 0, index = 0, payload } = props;
+                                const isLatest = index === filteredRiskTrendData.length - 1;
+                                if (isLatest && payload) {
+                                  return (
+                                    <g key={`dot-${index}`}>
+                                      <circle
+                                        cx={cx}
+                                        cy={cy}
+                                        r={5}
+                                        fill={chartColors.accent}
+                                        stroke="var(--bg)"
+                                        strokeWidth={2}
+                                      />
+                                      <circle
+                                        cx={cx}
+                                        cy={cy}
+                                        r={9}
+                                        fill="none"
+                                        stroke={chartColors.accent}
+                                        strokeWidth={1.5}
+                                        opacity={0.7}
+                                      />
+                                      <text
+                                        x={cx}
+                                        y={cy - 12}
+                                        textAnchor="middle"
+                                        fill={chartColors.accent}
+                                        fontSize={10}
+                                        fontFamily="var(--font-mono)"
+                                        fontWeight={600}
+                                      >
+                                        {payload.averageRisk}
+                                      </text>
+                                    </g>
+                                  );
+                                }
+                                return (
+                                  <circle
+                                    key={`dot-${index}`}
+                                    cx={cx}
+                                    cy={cy}
+                                    r={3}
+                                    fill={chartColors.warn}
+                                  />
+                                );
+                              }}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="h-[220px] flex items-center justify-center text-xs text-[var(--text-dim)] font-mono">
+                          No chronological risk entries in selected range.
                         </div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                      )}
+                    </div>
+
+                    {/* Accessible summary */}
+                    <p className="sr-only">
+                      Line chart tracking average risk severity over {filteredRiskTrendData.length} chronological days with y-axis from 0 to 100.
+                    </p>
+                    <div className="flex items-center justify-between text-xs text-[var(--text-dim)] pt-2 border-t border-[var(--border)] font-mono">
+                      <span>
+                        {filteredRiskTrendData.length}{' '}
+                        {filteredRiskTrendData.length === 1 ? 'day recorded' : 'days recorded'}
+                      </span>
+                      {latestTrendPoint && (
+                        <span>
+                          Latest point:{' '}
+                          <strong className="text-[var(--accent)]">
+                            {latestTrendPoint.averageRisk}/100
+                          </strong>{' '}
+                          on {latestTrendPoint.date} ({latestTrendPoint.count} scans)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </HudPanel>
+              </div>
             </div>
 
-            {/* Pagination Controls */}
-            {rows.length > 0 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 text-xs text-[var(--text-dim)] font-mono">
-                <div className="flex items-center gap-2">
-                  <span>Rows per page:</span>
-                  <select
-                    value={pageSize}
-                    aria-label="Select rows per page"
-                    onChange={(e) => {
-                      setPageSize(Number(e.target.value));
-                      setCurrentPage(1);
-                    }}
-                    className="bg-[rgba(10,28,44,0.9)] border border-[var(--panel-border)] text-slate-200 rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                  >
-                    <option value={10}>10</option>
-                    <option value={15}>15</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                  </select>
-                </div>
+            {/* THIRD ROW - Decisions, Top detections, Integrity (Three cards side-by-side) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
+              {/* Decisions Panel */}
+              <div
+                className="hud-stagger-card"
+                style={{ animationDelay: '240ms' }}
+              >
+                <HudPanel title="Decisions" tag="POLICY_BREAKDOWN">
+                  <div className="pt-1 space-y-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-[var(--text)]">
+                        Policy Decisions
+                      </h2>
+                      <p className="text-xs text-[var(--text-dim)]">
+                        Distribution across allow, sanitize, review, and block actions
+                      </p>
+                    </div>
 
-                <div className="flex items-center gap-2">
-                  <span>
-                    Page <strong className="text-white">{currentPage}</strong> of <strong className="text-white">{totalPages}</strong>
-                  </span>
+                    <div className="space-y-2.5 pt-1">
+                      {[
+                        {
+                          key: 'allow',
+                          label: 'ALLOW',
+                          count: aggregates.decisionsCount['allow'] || 0,
+                          colorClass: 'bg-[var(--ok)]',
+                          textColorClass: 'text-[var(--ok)]',
+                        },
+                        {
+                          key: 'sanitize',
+                          label: 'SANITIZE',
+                          count: aggregates.decisionsCount['sanitize'] || 0,
+                          colorClass: 'bg-[var(--accent)]',
+                          textColorClass: 'text-[var(--accent)]',
+                        },
+                        {
+                          key: 'review',
+                          label: 'REVIEW',
+                          count: aggregates.decisionsCount['review'] || 0,
+                          colorClass: 'bg-[var(--warn)]',
+                          textColorClass: 'text-[var(--warn)]',
+                        },
+                        {
+                          key: 'block',
+                          label: 'BLOCK',
+                          count: aggregates.decisionsCount['block'] || 0,
+                          colorClass: 'bg-[var(--critical)]',
+                          textColorClass: 'text-[var(--critical)]',
+                        },
+                      ].map((item) => {
+                        const pct =
+                          aggregates.totalScans > 0
+                            ? Math.round((item.count / aggregates.totalScans) * 100)
+                            : 0;
+                        return (
+                          <div key={item.key} className="space-y-1 font-mono text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className={`font-semibold ${item.textColorClass}`}>
+                                {item.label}
+                              </span>
+                              <span className="text-[var(--text-dim)]">
+                                <strong className="text-[var(--text)]">{item.count}</strong> ({pct}%)
+                              </span>
+                            </div>
+                            <div className="h-2 w-full bg-[var(--surface-2)] border border-[var(--border)] rounded-full overflow-hidden">
+                              <div
+                                className={`h-full ${item.colorClass} transition-all duration-500`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
 
-                  <div className="inline-flex gap-1 ml-2">
-                    <button
-                      type="button"
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                      aria-label="Go to previous page"
-                      className="px-2.5 py-1 rounded bg-[rgba(10,28,44,0.85)] hover:bg-[rgba(45,212,191,0.15)] border border-[var(--panel-border)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                    >
-                      ← Prev
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={currentPage >= totalPages}
-                      aria-label="Go to next page"
-                      className="px-2.5 py-1 rounded bg-[rgba(10,28,44,0.85)] hover:bg-[rgba(45,212,191,0.15)] border border-[var(--panel-border)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
-                    >
-                      Next →
-                    </button>
+                    <p className="sr-only">
+                      Horizontal bars summarizing enforcement decisions for allow, sanitize, review, and block.
+                    </p>
+                    <p className="text-xs text-[var(--text-dim)] pt-2 border-t border-[var(--border)] font-mono">
+                      Total policy decisions executed: {aggregates.totalScans}
+                    </p>
                   </div>
-                </div>
+                </HudPanel>
               </div>
-            )}
+
+              {/* Top detections Bar Chart */}
+              <div
+                className="hud-stagger-card"
+                style={{ animationDelay: '300ms' }}
+              >
+                <HudPanel title="Top detections" tag="CATEGORY_BARS">
+                  <div className="pt-1 space-y-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-[var(--text)]">
+                        Top detections
+                      </h2>
+                      <p className="text-xs text-[var(--text-dim)]">
+                        Frequency of identified sensitive categories
+                      </p>
+                    </div>
+
+                    <div className="min-h-[180px]">
+                      {categoryChartData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={180}>
+                          <BarChart
+                            data={categoryChartData}
+                            margin={{ top: 10, right: 10, left: -25, bottom: 25 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+                            <XAxis
+                              dataKey="category"
+                              stroke={chartColors.text}
+                              fontSize={10}
+                              angle={-25}
+                              textAnchor="end"
+                              interval={0}
+                              tickLine={{ stroke: chartColors.grid }}
+                              axisLine={{ stroke: chartColors.grid }}
+                            />
+                            <YAxis
+                              stroke={chartColors.text}
+                              fontSize={10}
+                              tickLine={{ stroke: chartColors.grid }}
+                              axisLine={{ stroke: chartColors.grid }}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: chartColors.tooltipBg,
+                                borderColor: chartColors.tooltipBorder,
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                color: chartColors.tooltipText,
+                              }}
+                              itemStyle={{ color: chartColors.tooltipText }}
+                              labelStyle={{ color: chartColors.accent, fontWeight: 600 }}
+                            />
+                            <Bar
+                              dataKey="count"
+                              fill={chartColors.accent}
+                              radius={[2, 2, 0, 0]}
+                              isAnimationActive={!hasAnimatedCharts}
+                              animationDuration={800}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="h-[180px] flex items-center justify-center text-xs text-[var(--text-dim)] font-mono">
+                          No categorical detections to display.
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="sr-only">
+                      Bar chart of category detection frequencies across top entities.
+                    </p>
+                    <p className="text-xs text-[var(--text-dim)] pt-2 border-t border-[var(--border)] font-mono">
+                      {categoryChartData.length} top categories visualized
+                    </p>
+                  </div>
+                </HudPanel>
+              </div>
+
+              {/* Integrity Verification Panel */}
+              <div
+                className="hud-stagger-card"
+                style={{ animationDelay: '360ms' }}
+              >
+                <HudPanel title="Integrity" tag="SHA256_VERIFY">
+                  <div className="pt-1 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-sm font-semibold text-[var(--text)]">
+                          Cryptographic Chain
+                        </h2>
+                        <p className="text-xs text-[var(--text-dim)]">
+                          Verify SHA-256 genesis links
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleVerifyChain}
+                        disabled={isVerifying}
+                        aria-label="Verify hash chain integrity"
+                        className="btn-secondary h-7 text-xs font-mono px-2.5 inline-flex items-center gap-1.5"
+                      >
+                        <svg
+                          className={`w-3 h-3 text-[var(--accent)] ${isVerifying ? 'animate-spin' : ''}`}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </svg>
+                        <span>{isVerifying ? 'Checking...' : 'Verify integrity'}</span>
+                      </button>
+                    </div>
+
+                    {/* Linked blocks row (1..12, +N more) */}
+                    <div
+                      className="p-2 bg-[var(--surface-2)] border border-[var(--border)] rounded overflow-x-auto"
+                      aria-label="Audit block chain verification progress"
+                    >
+                      <div className="flex items-center gap-1 min-w-max py-0.5">
+                        {Array.from({ length: displayBlockCount }).map((_, idx) => {
+                          const isChecked = verifyProgressIndex >= idx;
+                          const isCurrent = isVerifying && verifyProgressIndex === idx;
+                          const isTampered =
+                            verifyStatus && !verifyStatus.valid && idx === displayBlockCount - 1;
+
+                          let blockClass =
+                            'border border-[var(--border)] bg-[var(--surface)] text-[var(--text-dim)]';
+                          if (isTampered) {
+                            blockClass =
+                              'border-red-500 bg-red-950/80 text-red-200 animate-pulse ring-1 ring-red-500';
+                          } else if (isCurrent) {
+                            blockClass =
+                              'border-[var(--accent)] bg-[var(--accent)]/30 text-[var(--text)] ring-1 ring-[var(--accent)]';
+                          } else if (isChecked) {
+                            blockClass =
+                              'border-emerald-500/80 bg-emerald-950/40 text-emerald-300';
+                          }
+
+                          return (
+                            <React.Fragment key={idx}>
+                              <div
+                                className={`w-6 h-6 rounded flex items-center justify-center font-mono text-[9px] font-semibold transition-all duration-150 ${blockClass}`}
+                                title={`Block #${idx + 1}`}
+                              >
+                                #{idx + 1}
+                              </div>
+                              {idx < displayBlockCount - 1 && (
+                                <div
+                                  className={`w-1.5 h-[2px] transition-colors duration-150 ${
+                                    verifyProgressIndex > idx
+                                      ? 'bg-emerald-500'
+                                      : 'bg-[var(--border)]'
+                                  }`}
+                                />
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+
+                        {overflowBlockCount > 0 && (
+                          <>
+                            <div
+                              className={`w-1.5 h-[2px] transition-colors duration-150 ${
+                                verifyProgressIndex >= displayBlockCount
+                                  ? 'bg-emerald-500'
+                                  : 'bg-[var(--border)]'
+                              }`}
+                            />
+                            <div
+                              className={`px-1.5 h-6 rounded flex items-center justify-center font-mono text-[9px] border border-[var(--border)] bg-[var(--surface)] ${
+                                verifyProgressIndex >= displayBlockCount
+                                  ? 'text-emerald-300 border-emerald-500/60 bg-emerald-950/30'
+                                  : 'text-[var(--text-dim)]'
+                              }`}
+                            >
+                              +{overflowBlockCount} more
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Result Banner */}
+                    {verifyStatus && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className={`p-2.5 rounded border text-xs flex items-center justify-between gap-2 font-mono ${
+                          verifyStatus.valid
+                            ? 'bg-emerald-950/70 border-emerald-600 text-emerald-200'
+                            : 'bg-red-950/70 border-red-600 text-red-200'
+                        }`}
+                      >
+                        <div className="space-y-0.5">
+                          <p className="font-semibold flex items-center gap-1">
+                            {verifyStatus.valid ? (
+                              <>
+                                <svg
+                                  className="w-3.5 h-3.5 text-emerald-400"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  aria-hidden="true"
+                                >
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                                <span>Chain valid, {verifyStatus.checked ?? 0} entries checked</span>
+                              </>
+                            ) : (
+                              <>
+                                <svg
+                                  className="w-3.5 h-3.5 text-red-400"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10" />
+                                  <line x1="12" y1="8" x2="12" y2="12" />
+                                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                                </svg>
+                                <span>
+                                  Tampering detected at entry ID {verifyStatus.brokenAtId ?? 'unknown'}
+                                </span>
+                              </>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setVerifyStatus(null)}
+                          className="text-[10px] px-1.5 py-0.5 rounded hover:bg-black/20"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+
+                    <p className="text-xs text-[var(--text-dim)] pt-2 border-t border-[var(--border)] font-mono">
+                      Sequential SHA-256 hash chaining
+                    </p>
+                  </div>
+                </HudPanel>
+              </div>
+            </div>
+
+            {/* 4. Logs Table in a Panel Under the Grid */}
+            <div
+              className="hud-stagger-card"
+              style={{ animationDelay: '420ms' }}
+            >
+              <HudPanel title="Audit Log Ledger" tag="IMMUTABLE_CHAIN">
+                <div className="space-y-4 pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--border)]">
+                    <div>
+                      <h2 className="text-sm font-semibold text-[var(--text)]">
+                        Audit log
+                      </h2>
+                      <p className="text-xs text-[var(--text-dim)] font-mono">
+                        Showing {displayRows.length} {displayRows.length === 1 ? 'record' : 'records'}
+                        {aggregates && aggregates.totalScans > displayRows.length && ` (of ${aggregates.totalScans} total)`}
+                        {selectedCategory && (
+                          <span className="ml-2 text-[var(--accent)] font-semibold">
+                            Filtered by: {selectedCategory}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Filter Bar */}
+                  <div className="p-3 bg-[var(--surface-2)] border border-[var(--border)] rounded flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <label htmlFor="fromDateInput" className="text-[var(--text-dim)] font-mono text-[11px]">
+                          From:
+                        </label>
+                        <input
+                          id="fromDateInput"
+                          type="date"
+                          value={fromDate}
+                          onChange={(e) => setFromDate(e.target.value)}
+                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label htmlFor="toDateInput" className="text-[var(--text-dim)] font-mono text-[11px]">
+                          To:
+                        </label>
+                        <input
+                          id="toDateInput"
+                          type="date"
+                          value={toDate}
+                          onChange={(e) => setToDate(e.target.value)}
+                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label htmlFor="decisionSelect" className="text-[var(--text-dim)] font-mono text-[11px]">
+                          Decision:
+                        </label>
+                        <select
+                          id="decisionSelect"
+                          value={filterDecision}
+                          onChange={(e) => setFilterDecision(e.target.value)}
+                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        >
+                          <option value="all">All decisions</option>
+                          <option value="allow">Allow</option>
+                          <option value="sanitize">Sanitize</option>
+                          <option value="review">Review</option>
+                          <option value="block">Block</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label htmlFor="levelSelect" className="text-[var(--text-dim)] font-mono text-[11px]">
+                          Risk:
+                        </label>
+                        <select
+                          id="levelSelect"
+                          value={filterLevel}
+                          onChange={(e) => setFilterLevel(e.target.value)}
+                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        >
+                          <option value="all">All levels</option>
+                          <option value="low">Low (0-29)</option>
+                          <option value="medium">Medium (30-59)</option>
+                          <option value="high">High (60-84)</option>
+                          <option value="critical">Critical (85+)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {(fromDate || toDate || filterDecision !== 'all' || filterLevel !== 'all' || selectedCategory) && (
+                        <button
+                          type="button"
+                          onClick={handleClearFilters}
+                          className="px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text)] hover:text-[var(--accent)] transition font-mono text-xs"
+                        >
+                          Clear filters
+                        </button>
+                      )}
+
+                      <select
+                        aria-label="Limit results fetched from server"
+                        value={limit}
+                        onChange={(e) => setLimit(Number(e.target.value))}
+                        className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                      >
+                        <option value={50}>Limit 50</option>
+                        <option value={100}>Limit 100</option>
+                        <option value={200}>Limit 200</option>
+                        <option value={500}>Limit 500</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Table Container with Sticky Header */}
+                  <div className="overflow-x-auto w-full border border-[var(--border)] rounded max-h-[540px]">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 bg-[var(--surface-2)] border-b border-[var(--border)] text-[var(--text-dim)] font-mono z-10">
+                        <tr>
+                          <th scope="col" className="py-2.5 px-3 w-8">
+                            <span className="sr-only">Expand</span>
+                          </th>
+                          <th scope="col" className="py-2.5 px-3 whitespace-nowrap">Timestamp</th>
+                          <th scope="col" className="py-2.5 px-3">Action</th>
+                          <th scope="col" className="py-2.5 px-3">Decision</th>
+                          <th scope="col" className="py-2.5 px-3">Risk Level</th>
+                          <th scope="col" className="py-2.5 px-3">Categories</th>
+                          <th scope="col" className="py-2.5 px-3">Sanitized Prompt</th>
+                        </tr>
+                      </thead>
+
+                      <tbody className="divide-y divide-[var(--border)] text-[var(--text)]">
+                        {paginatedRows.length > 0 ? (
+                          paginatedRows.map((row) => {
+                            const isExpanded = expandedRowId === row.id;
+                            const shortenedPrompt =
+                              row.masked_prompt && row.masked_prompt.length > 70
+                                ? row.masked_prompt.slice(0, 70) + '...'
+                                : row.masked_prompt || '';
+
+                            return (
+                              <React.Fragment key={row.id}>
+                                <tr
+                                  onClick={() => setExpandedRowId(isExpanded ? null : row.id)}
+                                  className={`hover:bg-[var(--surface-2)] cursor-pointer transition ${
+                                    isExpanded ? 'bg-[var(--surface-2)] border-l-2 border-[var(--accent)]' : ''
+                                  }`}
+                                >
+                                  <td className="py-2.5 px-3 text-[var(--text-dim)] text-center font-mono text-[11px]">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setExpandedRowId(isExpanded ? null : row.id);
+                                      }}
+                                      aria-expanded={isExpanded}
+                                      aria-label={`Toggle details for audit entry ${row.id}`}
+                                      className="p-1 hover:text-[var(--accent)]"
+                                    >
+                                      {isExpanded ? '▼' : '▶'}
+                                    </button>
+                                  </td>
+
+                                  <td className="py-2.5 px-3 font-mono text-[var(--text-dim)] whitespace-nowrap text-[11px]">
+                                    {row.created_at ? new Date(row.created_at).toLocaleString() : '—'}
+                                  </td>
+
+                                  <td className="py-2.5 px-3">
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text)]">
+                                      {row.action}
+                                    </span>
+                                  </td>
+
+                                  <td className="py-2.5 px-3">
+                                    {renderDecisionBadge(row.decision)}
+                                  </td>
+
+                                  <td className="py-2.5 px-3 whitespace-nowrap">
+                                    {renderRiskBadge(row.risk_score)}
+                                  </td>
+
+                                  <td className="py-2.5 px-3">
+                                    {Array.isArray(row.categories) && row.categories.length > 0 ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {row.categories.map((c, i) => (
+                                          <span
+                                            key={i}
+                                            className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--surface-2)] text-[var(--text-dim)] border border-[var(--border)]"
+                                          >
+                                            {c}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[var(--text-dim)] font-mono">—</span>
+                                    )}
+                                  </td>
+
+                                  <td
+                                    className="py-2.5 px-3 font-mono text-[var(--text-dim)] text-xs max-w-xs truncate"
+                                    title={row.masked_prompt}
+                                  >
+                                    {shortenedPrompt}
+                                  </td>
+                                </tr>
+
+                                {isExpanded && (
+                                  <tr className="bg-[var(--surface-2)] border-b border-[var(--border)]">
+                                    <td colSpan={7} className="p-4 space-y-3">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                                        <div className="space-y-1">
+                                          <div className="text-[var(--text-dim)] font-mono text-[10px]">
+                                            Sanitized prompt (plain text):
+                                          </div>
+                                          <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded font-mono text-xs text-[var(--text)] whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+                                            {row.masked_prompt}
+                                          </div>
+                                        </div>
+
+                                        <div className="space-y-2.5">
+                                          <div>
+                                            <div className="flex items-center justify-between text-[var(--text-dim)] font-mono text-[10px]">
+                                              <span>Entry SHA-256 hash:</span>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleCopyHash(row.id, row.hash)}
+                                                aria-label="Copy entry hash"
+                                                className="text-[var(--accent)] hover:underline font-mono text-[10px]"
+                                              >
+                                                {copiedHashId === row.id ? 'Copied' : 'Copy'}
+                                              </button>
+                                            </div>
+                                            <code className="block p-2 bg-[var(--bg)] border border-[var(--border)] rounded font-mono text-[11px] text-[var(--accent)] break-all select-all mt-1">
+                                              {row.hash}
+                                            </code>
+                                          </div>
+
+                                          <div>
+                                            <div className="text-[var(--text-dim)] font-mono text-[10px]">
+                                              Previous hash (prev_hash):
+                                            </div>
+                                            <code className="block p-2 bg-[var(--bg)] border border-[var(--border)] rounded font-mono text-[11px] text-[var(--text-dim)] break-all select-all mt-1">
+                                              {row.prev_hash}
+                                            </code>
+                                          </div>
+
+                                          <div className="flex items-center gap-4 text-[10px] text-[var(--text-dim)] font-mono pt-1">
+                                            <span>ID: #{row.id}</span>
+                                            <span>User: {row.user_id || 'anonymous'}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan={7} className="py-12 px-4 text-center">
+                              <div className="max-w-md mx-auto space-y-3">
+                                <h3 className="text-sm font-semibold text-[var(--text)]">
+                                  No scans yet, try the Playground
+                                </h3>
+                                <p className="text-xs text-[var(--text-dim)] leading-relaxed">
+                                  No audit telemetry matches your current filter criteria. Run an inspection in the playground to generate audit records.
+                                </p>
+                                <div className="pt-2">
+                                  <Link
+                                    href="/playground"
+                                    className="btn-primary inline-flex items-center px-4 py-2 text-xs font-semibold"
+                                  >
+                                    Open Playground
+                                  </Link>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Controls */}
+                  {displayRows.length > 0 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 text-xs text-[var(--text-dim)] font-mono">
+                      <div className="flex items-center gap-2">
+                        <span>Rows per page:</span>
+                        <select
+                          value={pageSize}
+                          aria-label="Select rows per page"
+                          onChange={(e) => {
+                            setPageSize(Number(e.target.value));
+                            setCurrentPage(1);
+                          }}
+                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        >
+                          <option value={10}>10</option>
+                          <option value={15}>15</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span>
+                          Page <strong className="text-[var(--text)]">{currentPage}</strong> of{' '}
+                          <strong className="text-[var(--text)]">{totalPages}</strong>
+                        </span>
+
+                        <div className="inline-flex gap-1 ml-2">
+                          <button
+                            type="button"
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            disabled={currentPage === 1}
+                            aria-label="Go to previous page"
+                            className="px-2.5 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface)] border border-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--text)] transition"
+                          >
+                            ← Prev
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                            disabled={currentPage >= totalPages}
+                            aria-label="Go to next page"
+                            className="px-2.5 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface)] border border-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--text)] transition"
+                          >
+                            Next →
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </HudPanel>
+            </div>
           </div>
-        </HudPanel>
+        )}
       </main>
     </div>
   );

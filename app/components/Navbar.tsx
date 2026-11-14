@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import ThemeToggle from '@/components/ThemeToggle';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -12,7 +13,6 @@ export default function Navbar() {
     { label: 'Home', href: '/' },
     { label: 'Playground', href: '/playground' },
     { label: 'Dashboard', href: '/dashboard' },
-    { label: 'Case Study', href: '/case-study' },
   ];
 
   const isLinkActive = (href: string) => {
@@ -24,47 +24,31 @@ export default function Navbar() {
 
   return (
     <nav
-      className="border-b border-slate-800 bg-slate-900/90 sticky top-0 z-50 backdrop-blur-md"
+      className="border-b border-[var(--border)] bg-[var(--surface)] sticky top-0 z-50 transition-colors"
       aria-label="Primary Navigation"
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
         {/* Brand Logo & Desktop Navigation */}
         <div className="flex items-center gap-8">
           <Link
             href="/"
-            className="flex items-center gap-2.5 text-lg font-bold tracking-tight text-white hover:text-emerald-300 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 rounded-lg py-1 px-1.5"
+            className="text-base font-semibold text-[var(--text)] hover:text-[var(--accent)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded py-1 px-1"
           >
-            {/* Inline SVG Shield Logo */}
-            <svg
-              className="w-6 h-6 text-emerald-400 flex-shrink-0"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <path d="m9 12 2 2 4-4" />
-            </svg>
-            <span className="text-slate-100">
-              Yap<span className="text-emerald-400">Shield</span>
-            </span>
+            YapShield
           </Link>
 
           {/* Desktop Navigation Links */}
-          <div className="hidden md:flex items-center gap-1.5">
+          <div className="hidden md:flex items-center gap-6">
             {navLinks.map((link) => {
               const active = isLinkActive(link.href);
               return (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`text-sm font-medium py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded ${
                     active
-                      ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 shadow-sm font-semibold'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/60 border border-transparent'
+                      ? 'text-[var(--text)] border-b-2 border-[var(--accent)] font-semibold'
+                      : 'text-[var(--text-dim)] hover:text-[var(--text)]'
                   }`}
                   aria-current={active ? 'page' : undefined}
                 >
@@ -75,29 +59,25 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* Right Status Indicator & Mobile Menu Toggle */}
+        {/* Right Section: ThemeToggle & Mobile Menu Toggle */}
         <div className="flex items-center gap-3">
-          <div className="hidden sm:inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-emerald-950/70 text-emerald-400 border border-emerald-800/60 shadow-sm">
-            <span className="relative flex h-2 w-2" aria-hidden="true">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-            </span>
-            <span>Gateway Active</span>
+          {/* ThemeToggle on Desktop */}
+          <div className="hidden sm:block">
+            <ThemeToggle />
           </div>
 
-          {/* Mobile Hamburger Toggle Button */}
+          {/* Mobile Menu Hamburger Button */}
           <button
             type="button"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
-            className="md:hidden inline-flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="md:hidden inline-flex items-center justify-center p-2 rounded text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
             aria-controls="mobile-nav-menu"
             aria-expanded={mobileMenuOpen}
             aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
           >
             {mobileMenuOpen ? (
-              // Close "X" SVG Icon
               <svg
-                className="w-6 h-6"
+                className="w-5 h-5"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -110,9 +90,8 @@ export default function Navbar() {
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
             ) : (
-              // Hamburger SVG Icon
               <svg
-                className="w-6 h-6"
+                className="w-5 h-5"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -134,33 +113,32 @@ export default function Navbar() {
       {mobileMenuOpen && (
         <div
           id="mobile-nav-menu"
-          className="md:hidden border-t border-slate-800 bg-slate-900/95 px-4 pt-3 pb-4 space-y-2 shadow-2xl"
+          className="md:hidden border-t border-[var(--border)] bg-[var(--surface)] px-4 pt-3 pb-4 space-y-3"
         >
-          {navLinks.map((link) => {
-            const active = isLinkActive(link.href);
-            return (
-              <Link
-                key={link.href}
-                href={link.href}
-                onClick={() => setMobileMenuOpen(false)}
-                className={`block px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 font-semibold'
-                    : 'text-slate-200 hover:text-white hover:bg-slate-800/80 border border-transparent'
-                }`}
-                aria-current={active ? 'page' : undefined}
-              >
-                {link.label}
-              </Link>
-            );
-          })}
+          <div className="space-y-1">
+            {navLinks.map((link) => {
+              const active = isLinkActive(link.href);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`block px-3 py-2 rounded text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                    active
+                      ? 'text-[var(--text)] bg-[var(--surface-2)] border-l-2 border-[var(--accent)] font-semibold'
+                      : 'text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-2)]'
+                  }`}
+                  aria-current={active ? 'page' : undefined}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
+          </div>
 
-          <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
-              Gateway Status: Operational
-            </span>
-            <span className="text-slate-500 font-mono text-[11px]">v0.1.0</span>
+          <div className="pt-2 border-t border-[var(--border)] flex items-center justify-between">
+            <span className="text-xs font-mono text-[var(--text-dim)]">Theme:</span>
+            <ThemeToggle />
           </div>
         </div>
       )}

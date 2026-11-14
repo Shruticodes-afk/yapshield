@@ -6,3 +6,15 @@ export type { StatusDotProps, StatusDotType, StatusDotSize } from './StatusDot';
 
 export { default as HudPanel } from './HudPanel';
 export type { HudPanelProps } from './HudPanel';
+
+export { default as ThemeToggle } from './ThemeToggle';
+export type { ThemeChoice } from './ThemeToggle';
+
+export { default as CountUp } from './CountUp';
+export type { CountUpProps } from './CountUp';
+
+export { default as Reveal } from './Reveal';
+export type { RevealProps } from './Reveal';
+
+export { default as PageTransition } from './PageTransition';
+export type { PageTransitionProps } from './PageTransition';

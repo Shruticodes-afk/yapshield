@@ -79,21 +79,50 @@ export async function GET(request: NextRequest) {
     let injectionCount = 0;
     let totalRisk = 0;
     const categoriesCount: Record<string, number> = {};
+    const categoryBlockedCount: Record<string, number> = {};
+    const categoryRiskSum: Record<string, number> = {};
+    const categoryMaxRisk: Record<string, number> = {};
     const decisionsCount: Record<string, number> = {};
     const dayGroups: Record<string, { totalRisk: number; count: number }> = {};
+
+    const now = Date.now();
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    let scansLast7Days = 0;
+    let latestTimestamp: string | null = null;
+    const recentFlaggedScans: Array<{
+      createdAt: string;
+      decision: string;
+      riskScore: number;
+      categories: string[];
+    }> = [];
 
     for (const row of fetchedRows) {
       const risk = Number(row.risk_score) || 0;
       totalRisk += risk;
 
-      if (row.decision === 'block' || row.action === 'block') {
+      const isBlocked = row.decision === 'block' || row.action === 'block';
+      if (isBlocked) {
         blockedCount++;
+      }
+
+      const rowTime = row.created_at ? new Date(row.created_at).getTime() : 0;
+      if (rowTime >= sevenDaysAgo) {
+        scansLast7Days++;
+      }
+
+      if (row.created_at && (!latestTimestamp || new Date(row.created_at) > new Date(latestTimestamp))) {
+        latestTimestamp = row.created_at;
       }
 
       const cats = Array.isArray(row.categories) ? row.categories : [];
       let isInjection = false;
       for (const cat of cats) {
         categoriesCount[cat] = (categoriesCount[cat] || 0) + 1;
+        categoryRiskSum[cat] = (categoryRiskSum[cat] || 0) + risk;
+        categoryMaxRisk[cat] = Math.max(categoryMaxRisk[cat] || 0, risk);
+        if (isBlocked) {
+          categoryBlockedCount[cat] = (categoryBlockedCount[cat] || 0) + 1;
+        }
         if (cat.toLowerCase().includes('injection')) {
           isInjection = true;
         }
@@ -115,6 +144,20 @@ export async function GET(request: NextRequest) {
       }
       dayGroups[dateKey].totalRisk += risk;
       dayGroups[dateKey].count += 1;
+
+      // Collect last 8 flagged scans (non-allow, risk >= 30, or has categories)
+      // containing ONLY non-sensitive metadata (never prompt, maskedPrompt, userId, or IP)
+      if (
+        recentFlaggedScans.length < 8 &&
+        (risk >= 30 || row.decision !== 'allow' || cats.length > 0)
+      ) {
+        recentFlaggedScans.push({
+          createdAt: row.created_at || new Date().toISOString(),
+          decision: row.decision || 'unknown',
+          riskScore: risk,
+          categories: cats,
+        });
+      }
     }
 
     const averageRisk =
@@ -128,6 +171,16 @@ export async function GET(request: NextRequest) {
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    const categoryDetails = Object.keys(categoriesCount)
+      .map((cat) => ({
+        category: cat,
+        count: categoriesCount[cat],
+        blockedCount: categoryBlockedCount[cat] || 0,
+        averageRisk: Math.round((categoryRiskSum[cat] / categoriesCount[cat]) * 10) / 10,
+        maxRisk: categoryMaxRisk[cat] || 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
     return NextResponse.json(
       {
         rows: fetchedRows,
@@ -136,7 +189,11 @@ export async function GET(request: NextRequest) {
           blockedCount,
           injectionCount,
           averageRisk,
+          scansLast7Days,
+          latestTimestamp,
           categoriesCount,
+          categoryDetails,
+          recentFlaggedScans,
           decisionsCount,
           riskOverTime,
         },

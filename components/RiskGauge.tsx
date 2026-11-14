@@ -56,71 +56,49 @@ export default function RiskGauge({
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
   useEffect(() => {
-    // Check user reduced motion preference
     if (typeof window !== 'undefined' && window.matchMedia) {
       const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
       setPrefersReducedMotion(mediaQuery.matches);
+      const listener = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener('change', listener);
     }
-    // Animate once on mount
-    const timer = setTimeout(() => {
-      setMounted(true);
-    }, 40);
-
-    return () => clearTimeout(timer);
   }, []);
 
-  // Arc geometry calculations (240 degree open arc)
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const center = size / 2;
-  const radius = Math.max(10, (size - strokeWidth * 2) / 2);
+  const radius = center - strokeWidth - 4;
   const circumference = 2 * Math.PI * radius;
-  const arcLength = circumference * (240 / 360);
-  const targetOffset = arcLength * (1 - clampedScore / 100);
+  // 240 degree radial arc
+  const arcLength = (240 / 360) * circumference;
 
-  // If not mounted yet and motion is allowed, start from 0 progress (offset = arcLength)
+  const targetOffset = arcLength - (clampedScore / 100) * arcLength;
   const currentOffset = mounted || prefersReducedMotion ? targetOffset : arcLength;
-
-  const ariaLabel = `Risk score ${clampedScore} out of 100, ${displayLabel}`;
 
   return (
     <div
-      className={`inline-flex flex-col items-center justify-center select-none ${className}`}
+      className={`relative inline-flex flex-col items-center justify-center select-none ${className}`}
       style={{ width: size, height: size }}
+      role="img"
+      aria-label={`Risk score ${clampedScore} out of 100, ${displayLabel}`}
     >
       <svg
         width={size}
         height={size}
         viewBox={`0 0 ${size} ${size}`}
-        role="img"
-        aria-label={ariaLabel}
-        className="overflow-visible"
+        className="transform -rotate-90"
+        aria-hidden="true"
       >
-        {/* Decorative ambient radial glow in background */}
-        <defs>
-          <filter id={`hud-gauge-glow-${clampedScore}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3.5" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
-        </defs>
-
-        {/* Outer subtle tick marks / border ring */}
-        <circle
-          cx={center}
-          cy={center}
-          r={radius + strokeWidth * 0.85}
-          fill="none"
-          stroke="rgba(64, 224, 208, 0.14)"
-          strokeWidth="1"
-          strokeDasharray="2 6"
-          className="opacity-60"
-        />
-
-        {/* Gauge Track (240 degree arc rotated starting at 150 deg) */}
+        {/* Track Base Arc */}
         <circle
           cx={center}
           cy={center}
           r={radius}
           fill="none"
-          stroke="rgba(10, 28, 44, 0.9)"
+          stroke="var(--surface-2, #171d26)"
           strokeWidth={strokeWidth}
           strokeDasharray={`${arcLength} ${circumference}`}
           strokeLinecap="round"
@@ -131,11 +109,12 @@ export default function RiskGauge({
           cy={center}
           r={radius}
           fill="none"
-          stroke="rgba(64, 224, 208, 0.16)"
+          stroke="var(--border, #243040)"
           strokeWidth={strokeWidth}
           strokeDasharray={`${arcLength} ${circumference}`}
           strokeLinecap="round"
           transform={`rotate(150 ${center} ${center})`}
+          opacity="0.6"
         />
 
         {/* Foreground Colored Active Arc */}
@@ -150,11 +129,10 @@ export default function RiskGauge({
           strokeDashoffset={currentOffset}
           strokeLinecap="round"
           transform={`rotate(150 ${center} ${center})`}
-          filter={`url(#hud-gauge-glow-${clampedScore})`}
           style={{
             transition: prefersReducedMotion
               ? 'none'
-              : 'stroke-dashoffset 1.1s cubic-bezier(0.16, 1, 0.3, 1)',
+              : 'stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         />
 
@@ -164,13 +142,11 @@ export default function RiskGauge({
           y={center - size * 0.04}
           textAnchor="middle"
           dominantBaseline="central"
-          className="hud-stat"
           style={{
-            fill: 'var(--text)',
+            fill: 'var(--text, #e8edf3)',
             fontSize: `${Math.round(size * 0.24)}px`,
-            fontFamily:
-              'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-            fontWeight: 700,
+            fontFamily: 'var(--font-mono), monospace',
+            fontWeight: 600,
           }}
         >
           {clampedScore}
@@ -180,17 +156,15 @@ export default function RiskGauge({
         {showLabel && (
           <text
             x={center}
-            y={center + size * 0.18}
+            y={center + size * 0.2}
             textAnchor="middle"
             dominantBaseline="central"
-            className="hud-label"
             style={{
               fill: severity.color,
-              fontSize: `${Math.max(9, Math.round(size * 0.08))}px`,
-              fontFamily:
-                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+              fontSize: `${Math.max(10, Math.round(size * 0.09))}px`,
+              fontFamily: 'var(--font-sans), sans-serif',
               fontWeight: 600,
-              letterSpacing: '0.14em',
+              letterSpacing: '0.04em',
             }}
           >
             {displayLabel.toUpperCase()}

@@ -3,12 +3,12 @@ import StatusDot, { StatusDotType } from './StatusDot';
 
 export interface HudPanelProps {
   /** Main panel content */
-  children: React.ReactNode;
+  children?: React.ReactNode;
   /** Panel title */
   title?: string;
-  /** Small uppercase tracked tag or category */
+  /** Label or category */
   tag?: string;
-  /** Enable corner brackets via CSS pseudo-elements, default true */
+  /** Whether to show small corner tick marks, default true */
   brackets?: boolean;
   /** Operational status indicator in the header */
   status?: StatusDotType;
@@ -40,22 +40,22 @@ export default function HudPanel({
 
   return (
     <Component
-      className={`hud-panel ${brackets ? 'has-brackets' : ''} ${className}`}
+      className={`hud-panel ${brackets ? 'has-brackets' : 'no-brackets'} ${className}`}
     >
-      {/* HUD Header Bar */}
+      {/* Header Bar */}
       {hasHeader && (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5 sm:py-3 border-b border-[rgba(64,224,208,0.18)] bg-[rgba(4,11,20,0.45)] rounded-t-[7px]">
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--border)] bg-[var(--surface-2)] rounded-t-[7px]">
           <div className="flex items-center gap-2.5 min-w-0">
             {tag && (
-              <span className="hud-label text-[#2dd4bf] font-bold">
+              <span className="text-xs text-[var(--text-dim)] font-mono font-medium">
                 {tag}
               </span>
             )}
             {tag && title && (
-              <span className="text-[rgba(64,224,208,0.35)] select-none">•</span>
+              <span className="text-[var(--border)] select-none">•</span>
             )}
             {title && (
-              <h4 className="text-xs sm:text-sm font-semibold tracking-wide text-[#e6f1f5] truncate">
+              <h4 className="text-sm font-semibold tracking-normal text-[var(--text)] truncate">
                 {title}
               </h4>
             )}
