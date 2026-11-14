@@ -2,6 +2,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
+import RiskGauge from '@/components/RiskGauge';
+import StatusDot from '@/components/StatusDot';
+import HudPanel from '@/components/HudPanel';
 
 type PolicyPreset = 'Student' | 'Developer' | 'Enterprise';
 type ActionType = 'allow' | 'mask' | 'tokenize' | 'block';
@@ -58,9 +61,7 @@ interface PolicyCardInfo {
   name: PolicyPreset;
   mode: string;
   badge: string;
-  masked: string;
-  tokenized: string;
-  blocked: string;
+  explanation: string;
 }
 
 const POLICY_CARDS: PolicyCardInfo[] = [
@@ -68,25 +69,19 @@ const POLICY_CARDS: PolicyCardInfo[] = [
     name: 'Student',
     mode: 'Balanced',
     badge: 'Review Required',
-    masked: 'Emails & phone numbers permanently masked with generic tokens',
-    tokenized: 'None (no reversible tokens allowed)',
-    blocked: 'Government IDs (Aadhaar, PAN) & API credentials blocked',
+    explanation: 'Masks contact info, blocks government IDs & secrets, enforces pre-send review.',
   },
   {
     name: 'Developer',
     mode: 'Balanced',
     badge: 'Permissive',
-    masked: 'None (preserves original names & contextual titles)',
-    tokenized: 'Contact info (emails, phones) vaulted and restored in AI response',
-    blocked: 'API keys, private keys, JWTs & high-entropy secrets blocked',
+    explanation: 'Preserves names, vaults contact info for restoration, blocks API & private keys.',
   },
   {
     name: 'Enterprise',
     mode: 'Strict',
     badge: 'Zero-Trust',
-    masked: 'Internal system handles & non-approved identifiers',
-    tokenized: 'Controlled corporate identifiers under strict audit logging',
-    blocked: 'All secrets, government IDs, financial tokens & injection attacks (>40)',
+    explanation: 'Strict mode: blocks all government IDs, keys & injection attacks (>40 threshold).',
   },
 ];
 
@@ -101,8 +96,8 @@ const EXAMPLE_PROMPTS: ExamplePrompt[] = [
   {
     id: 'pii',
     label: '👤 Personal Details',
-    category: 'PII Contact Info',
-    text: 'Please contact Dr. Rahul Sharma at rahul.sharma@example.com or call 9876543210 regarding invoice #INV-9021.',
+    category: 'Synthetic Contact Info',
+    text: 'Please contact Dr. Rahul Sharma at rahul.sharma@example.com or call +91 98765 43210 regarding invoice #INV-9021.',
   },
   {
     id: 'secret',
@@ -130,75 +125,85 @@ const EXAMPLE_PROMPTS: ExamplePrompt[] = [
   },
 ];
 
-function getTypeColor(type: string): { bg: string; text: string; border: string; pill: string } {
+const PIPELINE_STEPS = ['Scan', 'Detect', 'Protect', 'Review', 'Send', 'Restore'] as const;
+
+function getTypeColor(type: string): {
+  bg: string;
+  text: string;
+  border: string;
+  underline: string;
+  pill: string;
+} {
   switch (type) {
     case 'aadhaar':
     case 'pan':
       return {
-        bg: 'bg-red-950/80',
+        bg: 'bg-red-950/70',
         text: 'text-red-300',
         border: 'border-red-700',
-        pill: 'bg-red-900/40 text-red-300 border-red-700',
+        underline: 'underline decoration-red-400 decoration-2 underline-offset-4',
+        pill: 'badge-critical',
       };
     case 'credit_card':
       return {
-        bg: 'bg-rose-950/80',
+        bg: 'bg-rose-950/70',
         text: 'text-rose-300',
         border: 'border-rose-700',
-        pill: 'bg-rose-900/40 text-rose-300 border-rose-700',
+        underline: 'underline decoration-rose-400 decoration-2 underline-offset-4',
+        pill: 'badge-critical',
       };
     case 'api_key':
     case 'private_key':
     case 'jwt':
     case 'high_entropy_secret':
       return {
-        bg: 'bg-purple-950/80',
+        bg: 'bg-purple-950/70',
         text: 'text-purple-300',
         border: 'border-purple-700',
-        pill: 'bg-purple-900/40 text-purple-300 border-purple-700',
+        underline: 'underline decoration-purple-400 decoration-2 underline-offset-4',
+        pill: 'badge-high',
       };
     case 'phone':
-      return {
-        bg: 'bg-blue-950/80',
-        text: 'text-blue-300',
-        border: 'border-blue-700',
-        pill: 'bg-blue-900/40 text-blue-300 border-blue-700',
-      };
     case 'email':
       return {
-        bg: 'bg-cyan-950/80',
+        bg: 'bg-cyan-950/70',
         text: 'text-cyan-300',
         border: 'border-cyan-700',
-        pill: 'bg-cyan-900/40 text-cyan-300 border-cyan-700',
+        underline: 'underline decoration-cyan-400 decoration-2 underline-offset-4',
+        pill: 'badge-medium',
       };
     case 'person':
       return {
-        bg: 'bg-amber-950/80',
+        bg: 'bg-amber-950/70',
         text: 'text-amber-300',
         border: 'border-amber-700',
-        pill: 'bg-amber-900/40 text-amber-300 border-amber-700',
+        underline: 'underline decoration-amber-400 decoration-2 underline-offset-4',
+        pill: 'badge-medium',
       };
     case 'upi':
     case 'ifsc':
       return {
-        bg: 'bg-teal-950/80',
+        bg: 'bg-teal-950/70',
         text: 'text-teal-300',
         border: 'border-teal-700',
-        pill: 'bg-teal-900/40 text-teal-300 border-teal-700',
+        underline: 'underline decoration-teal-400 decoration-2 underline-offset-4',
+        pill: 'badge-low',
       };
     case 'keyword':
       return {
-        bg: 'bg-yellow-950/80',
+        bg: 'bg-yellow-950/70',
         text: 'text-yellow-300',
         border: 'border-yellow-700',
-        pill: 'bg-yellow-900/40 text-yellow-300 border-yellow-700',
+        underline: 'underline decoration-yellow-400 decoration-2 underline-offset-4',
+        pill: 'badge-medium',
       };
     default:
       return {
-        bg: 'bg-slate-800',
+        bg: 'bg-[rgba(10,28,44,0.9)]',
         text: 'text-slate-300',
-        border: 'border-slate-700',
-        pill: 'bg-slate-800 text-slate-300 border-slate-700',
+        border: 'border-[rgba(64,224,208,0.3)]',
+        underline: 'underline decoration-teal-400 decoration-2 underline-offset-4',
+        pill: 'badge-low',
       };
   }
 }
@@ -229,15 +234,23 @@ export default function PlaygroundPage() {
   const answerRef = useRef<HTMLDivElement | null>(null);
   const resultsRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll to answer when received
+  // Auto-scroll to answer when response is received
   useEffect(() => {
     if (sendResult && answerRef.current) {
       answerRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [sendResult]);
 
-  // Determine current active step in the 3-step workflow
-  const currentStep = sendResult ? 3 : scanResult ? 2 : 1;
+  // Determine current active pipeline stage (Requirement 4)
+  const getActivePipelineIndex = () => {
+    if (sendResult) return 5; // Restore
+    if (isSending) return 4; // Send
+    if (scanResult) return 3; // Review
+    if (isScanning) return 1; // Detect
+    return 0; // Scan
+  };
+
+  const activePipelineIndex = getActivePipelineIndex();
 
   // Prompt change handler: resets preview results to guarantee offset integrity
   const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -273,7 +286,7 @@ export default function PlaygroundPage() {
     setSendError(null);
   };
 
-  // Step 1 -> 2: Scan Prompt (mode: 'preview')
+  // Step 1: Scan Prompt (mode: 'preview')
   const handleScan = async () => {
     if (!prompt.trim()) {
       setErrorMessage('Please enter a non-empty prompt.');
@@ -327,22 +340,19 @@ export default function PlaygroundPage() {
     }
   };
 
-  // Step 2 -> 3: Send to AI (mode: 'send')
+  // Step 2: Send to AI (mode: 'send')
   const handleSend = async () => {
     if (!scanResult) return;
 
-    // Immediately show loading state and disable button
     setIsSending(true);
     setIsRetrying(false);
     setSendError(null);
     setSendResult(null);
 
-    // Scroll to answer container immediately so user sees the skeleton loader
     setTimeout(() => {
       answerRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 50);
 
-    // Show retrying notice if request takes > 3.5 seconds (resilience backoff active)
     const retryTimer = setTimeout(() => {
       setIsRetrying(true);
     }, 3500);
@@ -362,7 +372,6 @@ export default function PlaygroundPage() {
       }
     }
 
-    // Format overrides payload
     const formattedOverrides = Object.entries(overrides).map(([idxStr, ov]) => {
       const idx = Number(idxStr);
       const f = scanResult.findings[idx];
@@ -444,7 +453,6 @@ export default function PlaygroundPage() {
         });
       }
     } catch {
-      // Network failure
       setSendError({
         message: 'Could not reach the gateway',
       });
@@ -463,12 +471,12 @@ export default function PlaygroundPage() {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       } catch {
-        // Fallback if clipboard API is unavailable
+        // Fallback
       }
     }
   };
 
-  // Render original text with findings highlighted as pure React text nodes (no dangerouslySetInnerHTML)
+  // Render original text with findings highlighted with color PLUS underline style (Requirement 3)
   const renderHighlightedPrompt = (text: string, findings: Finding[]) => {
     if (!findings || findings.length === 0) {
       return <span>{text}</span>;
@@ -493,7 +501,7 @@ export default function PlaygroundPage() {
         nodes.push(
           <mark
             key={`finding-${idx}-${finding.start}`}
-            className={`px-1.5 py-0.5 rounded font-mono text-xs border ${color.bg} ${color.text} ${color.border}`}
+            className={`px-1.5 py-0.5 rounded font-mono text-xs border ${color.bg} ${color.text} ${color.border} ${color.underline}`}
             title={`${finding.type} (${Math.round(finding.confidence * 100)}% conf) - Action: ${finding.action}`}
           >
             {chunk}
@@ -516,7 +524,7 @@ export default function PlaygroundPage() {
 
   const isBlocked = scanResult?.decision === 'block';
 
-  // Determine Result Banner styling and content based on decision
+  // Requirement 2: Status banner details (Safe to send, Will be sanitized, Review needed, Blocked)
   const getBannerDetails = () => {
     if (!scanResult) return null;
     const { decision } = scanResult;
@@ -524,43 +532,63 @@ export default function PlaygroundPage() {
     if (decision === 'block') {
       return {
         title: 'Blocked',
-        icon: '🔴',
-        bg: 'bg-red-950/90',
-        border: 'border-red-600',
+        icon: (
+          <svg className="w-5 h-5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="15" y1="9" x2="9" y2="15" />
+            <line x1="9" y1="9" x2="15" y2="15" />
+          </svg>
+        ),
+        bg: 'bg-red-950/70',
+        border: 'border-red-600/70',
         text: 'text-red-200',
-        badgeBg: 'bg-red-900/60 text-red-200 border-red-500',
-        description: 'Critical secrets, prohibited government IDs, or prompt injection anomalies detected.',
+        badgeClass: 'badge-critical',
+        description: 'Critical secrets, prohibited government identifiers, or prompt injection anomalies detected.',
       };
     }
     if (decision === 'review') {
       return {
         title: 'Review needed',
-        icon: '🔵',
-        bg: 'bg-blue-950/90',
-        border: 'border-blue-600',
-        text: 'text-blue-200',
-        badgeBg: 'bg-blue-900/60 text-blue-200 border-blue-500',
-        description: 'Policy requires human review and justification before forwarding to downstream AI.',
+        icon: (
+          <svg className="w-5 h-5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+        ),
+        bg: 'bg-cyan-950/70',
+        border: 'border-cyan-600/70',
+        text: 'text-cyan-200',
+        badgeClass: 'badge-medium',
+        description: 'Policy requires authorized human review and justification before forwarding to downstream AI.',
       };
     }
     if (decision === 'sanitize') {
       return {
         title: 'Will be sanitized',
-        icon: '🟡',
-        bg: 'bg-amber-950/90',
-        border: 'border-amber-600',
+        icon: (
+          <svg className="w-5 h-5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+        ),
+        bg: 'bg-amber-950/70',
+        border: 'border-amber-600/70',
         text: 'text-amber-200',
-        badgeBg: 'bg-amber-900/60 text-amber-200 border-amber-500',
+        badgeClass: 'badge-medium',
         description: 'Sensitive entities will be vaulted or masked with surrogate tokens before forwarding.',
       };
     }
     return {
       title: 'Safe to send',
-      icon: '🟢',
-      bg: 'bg-emerald-950/90',
-      border: 'border-emerald-600',
+      icon: (
+        <svg className="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ),
+      bg: 'bg-emerald-950/70',
+      border: 'border-emerald-600/70',
       text: 'text-emerald-200',
-      badgeBg: 'bg-emerald-900/60 text-emerald-200 border-emerald-500',
+      badgeClass: 'badge-low',
       description: 'Prompt adheres to safety policy and contains zero unmasked confidential entities.',
     };
   };
@@ -569,29 +597,49 @@ export default function PlaygroundPage() {
   const topReasons = scanResult?.risk.reasons ? scanResult.risk.reasons.slice(0, 3) : [];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col pb-24 lg:pb-12">
-      {/* Top Header */}
-      <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur-md sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
+    <div className="min-h-screen bg-[var(--bg-0)] text-[var(--text)] grid-bg flex flex-col pb-28 lg:pb-14">
+      {/* HUD Header Bar */}
+      <header className="border-b border-[var(--panel-border)] bg-[rgba(4,11,20,0.85)] backdrop-blur-md sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <span className="text-xl" aria-hidden="true">🛡️</span>
+            <svg
+              className="w-6 h-6 text-[#2dd4bf] flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
             <div>
-              <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-                YapShield Playground
+              <h1 className="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
+                <span>YapShield Security Playground</span>
+                <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-[rgba(45,212,191,0.12)] text-[#2dd4bf] border border-[rgba(45,212,191,0.3)]">
+                  HUD v2.4
+                </span>
               </h1>
-              <p className="text-xs text-slate-400">
-                Interactive privacy sandbox: scan, review, and safely forward prompts to AI.
+              <p className="text-[11px] text-[var(--text-dim)]">
+                Enterprise AI guardrails: real-time entity inspection, risk scoring & reversible vaulting.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs">
+          <div className="flex items-center gap-3">
+            <StatusDot
+              status={isScanning ? 'warn' : isSending ? 'alert' : 'active'}
+              label={isScanning ? 'SCANNING' : isSending ? 'FORWARDING' : 'HUD READY'}
+              size="sm"
+            />
             <Link
               href="/dashboard"
-              className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 transition focus-visible:ring-2 focus-visible:ring-emerald-400"
-              aria-label="Navigate to Security Dashboard"
+              className="px-3 py-1.5 rounded-lg bg-[rgba(10,28,44,0.8)] hover:bg-[rgba(10,28,44,1)] border border-[var(--panel-border)] text-xs text-slate-200 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
+              aria-label="Navigate to Audit Dashboard"
             >
-              Security Dashboard →
+              Audit Dashboard →
             </Link>
           </div>
         </div>
@@ -599,96 +647,59 @@ export default function PlaygroundPage() {
 
       {/* Main Workflow Container */}
       <main className="max-w-7xl w-full mx-auto px-4 py-6 space-y-6 flex-1">
-        {/* Requirement 1: Compact 3-Step Stepper */}
+        {/* Requirement 4: Pipeline Strip (Scan, Detect, Protect, Review, Send, Restore) */}
         <nav
-          aria-label="Playground 3-Step Flow"
-          className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 shadow-md"
+          aria-label="Security Pipeline Stages"
+          className="hud-panel p-3 shadow-md"
         >
-          <ol className="flex items-center justify-between sm:justify-center sm:gap-10 text-xs font-semibold">
-            {/* Step 1: Write */}
-            <li
-              className={`flex items-center gap-2 transition ${
-                currentStep === 1
-                  ? 'text-emerald-400 font-bold'
-                  : currentStep > 1
-                  ? 'text-emerald-300'
-                  : 'text-slate-400'
-              }`}
-            >
-              <span
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono border ${
-                  currentStep === 1
-                    ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
-                    : currentStep > 1
-                    ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-                aria-hidden="true"
-              >
-                {currentStep > 1 ? '✓' : '1'}
-              </span>
-              <span>1. Write</span>
-            </li>
+          <div className="flex items-center justify-between gap-1 overflow-x-auto scrollbar-none py-0.5">
+            {PIPELINE_STEPS.map((step, idx) => {
+              const isActive = idx === activePipelineIndex;
+              const isPast = idx < activePipelineIndex;
 
-            <li className="text-slate-700 select-none" aria-hidden="true">
-              ─────
-            </li>
+              return (
+                <div key={step} className="flex items-center gap-1.5 sm:gap-2 flex-1 min-w-max justify-center">
+                  <div
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-2 border ${
+                      isActive
+                        ? 'bg-[rgba(45,212,191,0.18)] border-[#2dd4bf] text-[#2dd4bf] font-bold shadow-[0_0_12px_rgba(45,212,191,0.3)]'
+                        : isPast
+                        ? 'bg-[rgba(10,28,44,0.6)] border-[rgba(64,224,208,0.2)] text-slate-200'
+                        : 'bg-[rgba(4,11,20,0.4)] border-transparent text-[var(--text-dim)]'
+                    }`}
+                  >
+                    <span
+                      className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-mono border ${
+                        isActive
+                          ? 'border-[#2dd4bf] text-[#2dd4bf] bg-[rgba(45,212,191,0.2)]'
+                          : isPast
+                          ? 'border-emerald-500 text-emerald-400 bg-emerald-950/60'
+                          : 'border-slate-700 text-slate-500'
+                      }`}
+                    >
+                      {isPast ? '✓' : idx + 1}
+                    </span>
+                    <span className="hud-label font-bold text-[11px]">
+                      {step}
+                    </span>
+                  </div>
 
-            {/* Step 2: Review */}
-            <li
-              className={`flex items-center gap-2 transition ${
-                currentStep === 2
-                  ? 'text-emerald-400 font-bold'
-                  : currentStep > 2
-                  ? 'text-emerald-300'
-                  : 'text-slate-400'
-              }`}
-            >
-              <span
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono border ${
-                  currentStep === 2
-                    ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
-                    : currentStep > 2
-                    ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-                aria-hidden="true"
-              >
-                {currentStep > 2 ? '✓' : '2'}
-              </span>
-              <span>2. Review</span>
-            </li>
-
-            <li className="text-slate-700 select-none" aria-hidden="true">
-              ─────
-            </li>
-
-            {/* Step 3: Answer */}
-            <li
-              className={`flex items-center gap-2 transition ${
-                currentStep === 3 ? 'text-emerald-400 font-bold' : 'text-slate-400'
-              }`}
-            >
-              <span
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono border ${
-                  currentStep === 3
-                    ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-                aria-hidden="true"
-              >
-                3
-              </span>
-              <span>3. Answer</span>
-            </li>
-          </ol>
+                  {idx < PIPELINE_STEPS.length - 1 && (
+                    <span className="text-[rgba(64,224,208,0.25)] select-none text-xs hidden sm:inline" aria-hidden="true">
+                      →
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </nav>
 
         {/* Global Error Banner */}
         {errorMessage && (
           <div
             role="alert"
-            className="p-4 rounded-xl bg-red-950/90 border border-red-700 text-red-200 text-sm flex items-start justify-between gap-3 shadow-lg"
+            className="p-4 rounded-xl bg-red-950/80 border border-red-700 text-red-200 text-sm flex items-start justify-between gap-3 shadow-lg"
           >
             <div className="flex items-start gap-2.5">
               <span className="text-red-400 text-base font-bold" aria-hidden="true">⚠️</span>
@@ -705,205 +716,186 @@ export default function PlaygroundPage() {
               type="button"
               onClick={() => setErrorMessage(null)}
               aria-label="Dismiss error notice"
-              className="text-red-300 hover:text-white text-xs font-mono px-2 py-1 rounded hover:bg-red-900/40 transition focus-visible:ring-2 focus-visible:ring-red-400"
+              className="text-red-300 hover:text-white text-xs font-mono px-2 py-1 rounded hover:bg-red-900/40 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
             >
               ✕
             </button>
           </div>
         )}
 
-        {/* Requirement 1: Two Column Layout on Desktop, Stacked on Mobile */}
+        {/* Requirement 1: Two-Column Layout on Desktop, Stacked on Mobile */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* ========================================================================= */}
-          {/* LEFT COLUMN: Prompt Input, Example Prompts, Policy Selector Cards (Step 1) */}
+          {/* LEFT COLUMN: Input Console (Prompt Textarea, Counter, Examples, Policies) */}
           {/* ========================================================================= */}
           <div className="lg:col-span-6 space-y-6">
-            {/* 1. Policy Selector Cards */}
-            <section
-              aria-labelledby="policy-heading"
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4"
-            >
-              <div className="border-b border-slate-800 pb-3">
-                <h2 id="policy-heading" className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                  <span>⚙️</span> Step 1: Select Policy Preset
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Choose the security rules governing entity redaction, tokenization, and blocking.
-                </p>
-              </div>
-
-              {/* Requirement 3: Policy selector as three cards with explanations */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {POLICY_CARDS.map((card) => {
-                  const isSelected = policyName === card.name;
-                  return (
-                    <button
-                      key={card.name}
-                      type="button"
-                      onClick={() => handlePolicyChange(card.name)}
-                      aria-pressed={isSelected}
-                      aria-label={`Select ${card.name} security policy preset`}
-                      className={`p-3.5 rounded-xl border text-left transition flex flex-col justify-between focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-                        isSelected
-                          ? 'border-emerald-500 bg-emerald-950/40 shadow-sm ring-1 ring-emerald-500/60'
-                          : 'border-slate-800 bg-slate-950/60 hover:border-slate-700 hover:bg-slate-950 text-slate-400'
-                      }`}
-                    >
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span
-                            className={`text-sm font-bold ${
-                              isSelected ? 'text-white' : 'text-slate-200'
-                            }`}
-                          >
-                            {card.name}
-                          </span>
-                          <span
-                            className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
-                              card.mode === 'Strict'
-                                ? 'bg-red-950 text-red-300 border-red-800'
-                                : 'bg-slate-900 text-slate-300 border-slate-700'
-                            }`}
-                          >
-                            {card.mode}
-                          </span>
-                        </div>
-
-                        {/* Plain explanation bullets */}
-                        <div className="space-y-1.5 text-[11px] leading-tight pt-1">
-                          <p className="text-slate-300">
-                            <span className="text-blue-400 font-semibold">🎭 Mask:</span> {card.masked}
-                          </p>
-                          <p className="text-slate-300">
-                            <span className="text-purple-400 font-semibold">🔒 Tokenize:</span> {card.tokenized}
-                          </p>
-                          <p className="text-slate-300">
-                            <span className="text-red-400 font-semibold">🚫 Block:</span> {card.blocked}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="pt-3 mt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
-                        <span className={isSelected ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
-                          {isSelected ? '● Active' : '○ Click to select'}
-                        </span>
-                        <span className="text-slate-500">{card.badge}</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Requirement 3: Note explaining mask vs tokenize */}
-              <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-[11px] text-slate-300 leading-relaxed flex items-start gap-2">
-                <span className="text-emerald-400 text-xs" aria-hidden="true">💡</span>
-                <p>
-                  <strong className="text-slate-200">Difference Note:</strong> &lsquo;<strong>Mask</strong>&rsquo; is permanent placeholder redaction, while &lsquo;<strong>Tokenize</strong>&rsquo; encrypts values in the ephemeral AES-256-GCM vault and restores original text in the answer.
-                </p>
-              </div>
-            </section>
-
-            {/* 2. Prompt Textarea & Action Area */}
-            <section
-              aria-labelledby="prompt-heading"
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4"
-            >
-              {/* Header with Character Counter */}
-              <div className="flex items-center justify-between">
-                <h2 id="prompt-heading" className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                  <span>📝</span> Prompt Input
-                </h2>
-
-                {/* Requirement 8: Character counter with 4000 limit */}
+            {/* 1. Prompt Input Console Panel */}
+            <HudPanel
+              title="Prompt Input Console"
+              tag="CONSOLE_IN"
+              brackets={true}
+              headerAction={
                 <span
-                  className={`text-xs font-mono font-medium ${
-                    prompt.length > 4000 ? 'text-red-400 font-bold' : 'text-slate-400'
+                  className={`hud-label ${
+                    prompt.length > 4000 ? 'text-red-400 font-bold' : 'text-[var(--text-dim)]'
                   }`}
                   aria-live="polite"
                 >
                   {prompt.length.toLocaleString()} / 4,000 characters
                 </span>
-              </div>
+              }
+            >
+              <div className="space-y-4">
+                {/* Textarea */}
+                <div>
+                  <label htmlFor="promptInput" className="sr-only">
+                    Prompt text to scan and inspect
+                  </label>
+                  <textarea
+                    id="promptInput"
+                    rows={6}
+                    value={prompt}
+                    onChange={handlePromptChange}
+                    placeholder="Enter or paste prompt here to inspect Indian PII, secrets, or prompt injection..."
+                    className={`w-full bg-[rgba(4,11,20,0.85)] border rounded-xl p-3.5 text-xs sm:text-sm font-mono text-[var(--text)] placeholder:text-slate-600 focus-visible:outline-none focus-visible:ring-2 transition ${
+                      prompt.length > 4000
+                        ? 'border-red-600 focus-visible:ring-red-400'
+                        : 'border-[var(--panel-border)] focus-visible:ring-[#2dd4bf]'
+                    }`}
+                  />
+                  {prompt.length > 4000 && (
+                    <p className="text-xs text-red-400 font-medium pt-1">
+                      ⚠️ Prompt exceeds the 4,000 character limit. Please shorten your prompt before scanning.
+                    </p>
+                  )}
+                </div>
 
-              {/* Textarea */}
-              <div className="space-y-1">
-                <label htmlFor="promptInput" className="sr-only">
-                  Prompt text to scan and inspect
-                </label>
-                <textarea
-                  id="promptInput"
-                  rows={5}
-                  value={prompt}
-                  onChange={handlePromptChange}
-                  placeholder="Paste or write prompt here to inspect PII, secrets, or prompt injection..."
-                  className={`w-full bg-slate-950 border rounded-xl p-3.5 text-sm text-slate-100 placeholder-slate-600 focus-visible:outline-none focus-visible:ring-2 transition ${
-                    prompt.length > 4000
-                      ? 'border-red-600 focus-visible:ring-red-400'
-                      : 'border-slate-800 focus-visible:ring-emerald-400'
-                  }`}
-                />
-                {prompt.length > 4000 && (
-                  <p className="text-xs text-red-400 font-medium pt-1">
-                    ⚠️ Prompt exceeds the 4,000 character deployment limit. Please shorten your prompt before scanning.
-                  </p>
-                )}
-              </div>
+                {/* Example Prompt Chips (Requirement 1) */}
+                <div className="space-y-2 pt-2 border-t border-[rgba(64,224,208,0.15)]">
+                  <span className="hud-label block text-[10px]">
+                    Quick Example Chips (Populates textarea only):
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {EXAMPLE_PROMPTS.map((ex) => (
+                      <button
+                        key={ex.id}
+                        type="button"
+                        onClick={() => handleSelectExample(ex.text)}
+                        aria-label={`Fill textarea with ${ex.label}`}
+                        title={ex.category}
+                        className="px-2.5 py-1.5 rounded-lg bg-[rgba(10,28,44,0.65)] hover:bg-[rgba(45,212,191,0.12)] border border-[rgba(64,224,208,0.22)] hover:border-[#2dd4bf] text-xs text-slate-200 transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
+                      >
+                        <span>{ex.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              {/* Requirement 2: Row of Clickable Example Prompts */}
-              <div className="space-y-2 pt-1 border-t border-slate-800/80">
-                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                  Quick Examples (Click to populate textarea):
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  {EXAMPLE_PROMPTS.map((ex) => (
-                    <button
-                      key={ex.id}
-                      type="button"
-                      onClick={() => handleSelectExample(ex.text)}
-                      aria-label={`Fill textarea with ${ex.label} example`}
-                      title={ex.category}
-                      className="px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 hover:text-white transition flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-emerald-400"
-                    >
-                      <span>{ex.label}</span>
-                    </button>
-                  ))}
+                {/* Scan Action Button */}
+                <div className="pt-2 flex items-center justify-between">
+                  <span className="text-[11px] text-[var(--text-dim)] font-mono">
+                    Editing resets preview for offset accuracy
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleScan}
+                    disabled={isScanning || !prompt.trim() || prompt.length > 4000}
+                    aria-label="Scan prompt for security risks and sensitive entities"
+                    className="px-6 py-2.5 rounded-xl bg-[#2dd4bf] hover:bg-[#14b8a6] disabled:opacity-50 disabled:pointer-events-none text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_20px_rgba(45,212,191,0.3)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    {isScanning ? (
+                      <>
+                        <span
+                          className="w-4 h-4 border-2 border-slate-950/40 border-t-slate-950 rounded-full animate-spin"
+                          aria-hidden="true"
+                        />
+                        <span>Scanning...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span aria-hidden="true">🔍</span>
+                        <span>Scan Prompt</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
+            </HudPanel>
 
-              {/* Scan Action Button */}
-              <div className="pt-2 flex items-center justify-between">
-                <span className="text-[11px] text-slate-500">
-                  Editing prompt resets preview to preserve offset accuracy.
-                </span>
+            {/* 2. Policy Preset Cards (Requirement 1 & 3) */}
+            <HudPanel
+              title="Security Policy Presets"
+              tag="POLICY_MODE"
+              brackets={true}
+            >
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {POLICY_CARDS.map((card) => {
+                    const isSelected = policyName === card.name;
+                    return (
+                      <button
+                        key={card.name}
+                        type="button"
+                        onClick={() => handlePolicyChange(card.name)}
+                        aria-pressed={isSelected}
+                        aria-label={`Select ${card.name} policy`}
+                        className={`p-3.5 rounded-xl border text-left transition flex flex-col justify-between focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf] ${
+                          isSelected
+                            ? 'border-[#2dd4bf] bg-[rgba(45,212,191,0.12)] shadow-[0_0_15px_rgba(45,212,191,0.2)]'
+                            : 'border-[var(--panel-border)] bg-[rgba(4,11,20,0.6)] hover:border-slate-600 hover:bg-[rgba(10,28,44,0.6)] text-[var(--text-dim)]'
+                        }`}
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span
+                              className={`text-sm font-bold ${
+                                isSelected ? 'text-white' : 'text-slate-200'
+                              }`}
+                            >
+                              {card.name}
+                            </span>
+                            <span
+                              className={`text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase font-medium ${
+                                card.mode === 'Strict'
+                                  ? 'bg-red-950/70 text-red-300 border-red-800'
+                                  : 'bg-slate-900 text-slate-300 border-slate-700'
+                              }`}
+                            >
+                              {card.mode}
+                            </span>
+                          </div>
 
-                <button
-                  type="button"
-                  onClick={handleScan}
-                  disabled={isScanning || !prompt.trim() || prompt.length > 4000}
-                  aria-label="Scan prompt for sensitive entities and security risks"
-                  className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:pointer-events-none text-white font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-emerald-950 transition focus-visible:ring-2 focus-visible:ring-emerald-400"
-                >
-                  {isScanning ? (
-                    <>
-                      <span
-                        className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                        aria-hidden="true"
-                      />
-                      <span>Scanning...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span aria-hidden="true">🔍</span>
-                      <span>Scan Prompt</span>
-                    </>
-                  )}
-                </button>
+                          {/* One-line explanation */}
+                          <p className="text-[11px] text-slate-300 leading-snug">
+                            {card.explanation}
+                          </p>
+                        </div>
+
+                        <div className="pt-2 mt-2 border-t border-[rgba(64,224,208,0.15)] flex items-center justify-between text-[10px] font-mono">
+                          <span className={isSelected ? 'text-[#2dd4bf] font-bold' : 'text-slate-500'}>
+                            {isSelected ? '● ACTIVE' : 'SELECT'}
+                          </span>
+                          <span className="text-slate-400">{card.badge}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Plain note: Mask vs Tokenize */}
+                <div className="p-3 bg-[rgba(4,11,20,0.7)] rounded-xl border border-[rgba(64,224,208,0.18)] text-[11px] text-[var(--text-dim)] leading-relaxed flex items-start gap-2.5">
+                  <span className="text-[#2dd4bf] text-xs font-bold" aria-hidden="true">ℹ</span>
+                  <p>
+                    <strong className="text-slate-200">Rule Note:</strong> &lsquo;<strong>Mask</strong>&rsquo; is permanent redaction with surrogate tokens. &lsquo;<strong>Tokenize</strong>&rsquo; encrypts sensitive data in the ephemeral AES-256-GCM vault and restores original text in the answer.
+                  </p>
+                </div>
               </div>
-            </section>
+            </HudPanel>
           </div>
 
           {/* ========================================================================= */}
-          {/* RIGHT COLUMN: Results, Review Banner, Findings, Overrides & Answer Card   */}
+          {/* RIGHT COLUMN: Analysis Panel (RiskGauge, Findings, Review, Answer)       */}
           {/* ========================================================================= */}
           <div
             ref={resultsRef}
@@ -911,437 +903,454 @@ export default function PlaygroundPage() {
             aria-live="polite"
             aria-atomic="false"
           >
-            {/* Requirement 9: Clear Empty State when nothing has been scanned */}
+            {/* Empty State before Scan */}
             {!scanResult && !isScanning && !sendResult && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl text-center space-y-4">
-                <div className="w-14 h-14 rounded-2xl bg-slate-800/60 border border-slate-700 flex items-center justify-center mx-auto text-2xl" aria-hidden="true">
-                  🛡️
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">Awaiting Prompt Scan</h3>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
-                    Select a policy preset, enter or choose an example prompt on the left, and click <strong className="text-slate-200">&lsquo;Scan Prompt&rsquo;</strong> to evaluate PII, secrets, and injection risks.
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 text-left text-xs max-w-lg mx-auto">
-                  <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                    <span className="text-emerald-400 font-bold block mb-1">🇮🇳 India Detectors</span>
-                    <span className="text-slate-400 text-[11px]">Verhoeff Aadhaar, PAN, UPI, IFSC & Indian Mobiles</span>
+              <HudPanel
+                title="Telemetry & Risk Analysis"
+                tag="STANDBY"
+                brackets={true}
+                className="text-center py-8"
+              >
+                <div className="max-w-md mx-auto space-y-4">
+                  <div className="w-16 h-16 rounded-2xl bg-[rgba(4,11,20,0.8)] border border-[var(--panel-border)] flex items-center justify-center mx-auto text-[#2dd4bf]">
+                    <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
                   </div>
-                  <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                    <span className="text-purple-400 font-bold block mb-1">🔑 Secrets Scanner</span>
-                    <span className="text-slate-400 text-[11px]">API keys, JWT tokens, PEM private keys & entropy</span>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Awaiting Prompt Scan</h3>
+                    <p className="text-xs text-[var(--text-dim)] mt-1 leading-relaxed">
+                      Enter a prompt or select a chip on the left, then click <strong className="text-white">&lsquo;Scan Prompt&rsquo;</strong> to activate the HUD radar, check Indian PII, and assess prompt-injection threat levels.
+                    </p>
                   </div>
-                  <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                    <span className="text-blue-400 font-bold block mb-1">🔒 Reversible Vault</span>
-                    <span className="text-slate-400 text-[11px]">Surrogate tokens restored in downstream AI output</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 text-left text-xs">
+                    <div className="p-2.5 rounded-xl bg-[rgba(4,11,20,0.7)] border border-[rgba(64,224,208,0.18)]">
+                      <span className="text-[#2dd4bf] font-mono text-[10px] font-bold block mb-0.5">01 // DETECT</span>
+                      <span className="text-slate-300 text-[11px]">Aadhaar Verhoeff, PAN, UPI & secrets</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-[rgba(4,11,20,0.7)] border border-[rgba(64,224,208,0.18)]">
+                      <span className="text-[#fbbf24] font-mono text-[10px] font-bold block mb-0.5">02 // SCORE</span>
+                      <span className="text-slate-300 text-[11px]">0-100 radial risk gauge & telemetry</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-[rgba(4,11,20,0.7)] border border-[rgba(64,224,208,0.18)]">
+                      <span className="text-[#22c55e] font-mono text-[10px] font-bold block mb-0.5">03 // RESTORE</span>
+                      <span className="text-slate-300 text-[11px]">AES-256-GCM reversible tokens</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </HudPanel>
             )}
 
-            {/* Requirement 9: Loading State during Scan */}
+            {/* Loading State during Scan */}
             {isScanning && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl text-center space-y-4 animate-pulse">
-                <div className="w-12 h-12 rounded-full border-4 border-emerald-400/30 border-t-emerald-400 animate-spin mx-auto" aria-hidden="true" />
-                <div>
-                  <h3 className="text-sm font-bold text-white">Scanning Prompt Security...</h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Executing multi-layer heuristic entity detectors and prompt injection risk analyzers.
-                  </p>
+              <HudPanel
+                title="Executing Heuristic Scanners..."
+                tag="SCANNING"
+                brackets={true}
+                className="py-10 text-center"
+              >
+                <div className="space-y-4">
+                  <div className="w-12 h-12 rounded-full border-2 border-[rgba(45,212,191,0.2)] border-t-[#2dd4bf] animate-spin mx-auto" aria-hidden="true" />
+                  <div>
+                    <h3 className="text-sm font-bold text-white font-mono">CALCULATING TELEMETRY</h3>
+                    <p className="text-xs text-[var(--text-dim)] mt-1">
+                      Verifying Verhoeff checksums, entropy thresholds, and injection vector signatures...
+                    </p>
+                  </div>
                 </div>
-              </div>
+              </HudPanel>
             )}
 
-            {/* Step 2: Scan Review & Findings */}
+            {/* Requirement 2: RiskGauge, Top 3 Reasons & Status Banner */}
             {scanResult && (
               <div className="space-y-6">
-                {/* Requirement 4: Scan Result Banner */}
-                {banner && (
-                  <section
-                    aria-labelledby="banner-heading"
-                    className={`border rounded-2xl p-5 shadow-xl space-y-3 ${banner.bg} ${banner.border}`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-2xl" aria-hidden="true">{banner.icon}</span>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 id="banner-heading" className={`text-base font-extrabold ${banner.text}`}>
-                              {banner.title}
-                            </h3>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${banner.badgeBg}`}>
-                              Decision: {scanResult.decision}
-                            </span>
+                <HudPanel
+                  title="Risk Assessment & Gateway Decision"
+                  tag="TELEMETRY_OUT"
+                  brackets={true}
+                >
+                  <div className="space-y-5">
+                    {/* Status Banner (Requirement 2: Safe to send, Will be sanitized, Review needed, Blocked) */}
+                    {banner && (
+                      <div
+                        className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${banner.bg} ${banner.border}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex-shrink-0" aria-hidden="true">
+                            {banner.icon}
                           </div>
-                          <p className="text-xs text-slate-300 mt-0.5">{banner.description}</p>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className={`text-sm sm:text-base font-bold ${banner.text}`}>
+                                {banner.title}
+                              </h3>
+                              <span className={banner.badgeClass}>
+                                {scanResult.decision}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-300 mt-0.5">{banner.description}</p>
+                          </div>
                         </div>
                       </div>
+                    )}
 
-                      {/* Prominent Risk Score */}
-                      <div className="bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2 text-right">
-                        <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                          Risk Score
-                        </div>
-                        <div className="text-xl font-extrabold text-white">
-                          {scanResult.risk.score}
-                          <span className="text-slate-500 text-xs font-normal"> / 100</span>
-                        </div>
-                        <span
-                          className={`inline-block text-[10px] font-mono uppercase font-bold px-1.5 py-0.2 rounded ${
-                            scanResult.risk.level === 'low'
-                              ? 'text-emerald-400'
-                              : scanResult.risk.level === 'medium'
-                              ? 'text-yellow-400'
-                              : scanResult.risk.level === 'high'
-                              ? 'text-orange-400'
-                              : 'text-red-400'
-                          }`}
-                        >
-                          {scanResult.risk.level} Risk
+                    {/* Radial Gauge & Top 3 Reasons in Plain Language */}
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-5 items-center bg-[rgba(4,11,20,0.65)] border border-[rgba(64,224,208,0.18)] p-4 rounded-xl">
+                      {/* RiskGauge (Requirement 2) */}
+                      <div className="sm:col-span-5 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-[rgba(64,224,208,0.15)] pb-4 sm:pb-0 sm:pr-4">
+                        <RiskGauge
+                          score={scanResult.risk.score}
+                          size={140}
+                          strokeWidth={8}
+                        />
+                      </div>
+
+                      {/* Top 3 Plain Language Reasons */}
+                      <div className="sm:col-span-7 space-y-2">
+                        <span className="hud-label block text-[10px]">
+                          Top Diagnostic Reasons:
                         </span>
+                        {topReasons.length > 0 ? (
+                          <ul className="space-y-1.5 text-xs text-slate-200">
+                            {topReasons.map((reason, idx) => (
+                              <li
+                                key={idx}
+                                className="p-2 rounded-lg bg-[rgba(10,28,44,0.7)] border border-[rgba(64,224,208,0.15)] flex items-start gap-2"
+                              >
+                                <span className="text-[#2dd4bf] font-bold">›</span>
+                                <span>{reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-xs text-slate-300 italic p-2 bg-[rgba(10,28,44,0.6)] rounded-lg">
+                            Clean prompt: No sensitive entities or prompt injection anomalies detected.
+                          </p>
+                        )}
                       </div>
                     </div>
+                  </div>
+                </HudPanel>
 
-                    {/* Top 3 Reasons in Plain Language */}
-                    <div className="pt-1">
-                      <h4 className="text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                        <span>🔍</span> Key Findings Summary:
-                      </h4>
-                      {topReasons.length > 0 ? (
-                        <ul className="space-y-1.5 text-xs text-slate-200">
-                          {topReasons.map((reason, idx) => (
-                            <li
-                              key={idx}
-                              className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80 flex items-center gap-2"
-                            >
-                              <span className="text-emerald-400 font-bold">•</span>
-                              <span>{reason}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-xs text-slate-300 italic p-2 bg-slate-950/50 rounded-lg">
-                          Clean prompt: No sensitive entities or prompt injection anomalies detected.
-                        </p>
-                      )}
-                    </div>
-                  </section>
-                )}
-
-                {/* Side-by-Side Review Previews */}
+                {/* Requirement 3: Review Area (Side-by-Side HUD Panels) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Highlighted Original */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col">
-                    <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                        <span>📝</span> Highlighted Prompt
-                      </h4>
-                      <span className="text-[11px] text-slate-400 font-mono">
+                  {/* Original Prompt with Color + Underline Highlight */}
+                  <HudPanel
+                    title="Original Prompt"
+                    tag="SOURCE"
+                    brackets={true}
+                    headerAction={
+                      <span className="hud-label font-mono text-[10px]">
                         {scanResult.findings.length} findings
                       </span>
-                    </div>
-                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 flex-1 min-h-[110px] max-h-[220px] overflow-auto text-slate-300">
+                    }
+                  >
+                    <div className="bg-[rgba(4,11,20,0.85)] p-3 rounded-xl border border-[rgba(64,224,208,0.15)] min-h-[120px] max-h-[220px] overflow-auto text-slate-200">
                       {renderHighlightedPrompt(prompt, scanResult.findings)}
                     </div>
-                  </div>
+                  </HudPanel>
 
-                  {/* Sanitized Preview */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col">
-                    <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                        <span>🔒</span> Sanitized Preview
-                      </h4>
-                      <span className="text-[11px] text-emerald-400 font-mono">
-                        Vault Protected
+                  {/* Sanitized Prompt */}
+                  <HudPanel
+                    title="Sanitized Preview"
+                    tag="VAULT_SURROGATE"
+                    brackets={true}
+                    headerAction={
+                      <span className="badge-low text-[10px]">
+                        Vault Active
                       </span>
-                    </div>
-                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 flex-1 min-h-[110px] max-h-[220px] overflow-auto text-slate-300 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+                    }
+                  >
+                    <div className="bg-[rgba(4,11,20,0.85)] p-3 rounded-xl border border-[rgba(64,224,208,0.15)] min-h-[120px] max-h-[220px] overflow-auto font-mono text-xs text-slate-200 whitespace-pre-wrap leading-relaxed">
                       {scanResult.sanitizedPreview}
                     </div>
-                  </div>
+                  </HudPanel>
                 </div>
 
-                {/* Findings Table & Policy Overrides */}
+                {/* Requirement 3: Findings Table with Confidence Bar & Overrides */}
                 {scanResult.findings.length > 0 && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-                    <div className="border-b border-slate-800 pb-2">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-                        Findings Table & Safe Overrides
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Non-blocked items can be re-routed (e.g. from Mask to Tokenize) with a required justification.
-                      </p>
-                    </div>
+                  <HudPanel
+                    title="Findings & Policy Controls"
+                    tag="INSPECTION_TABLE"
+                    brackets={true}
+                  >
+                    <div className="space-y-3">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-[rgba(64,224,208,0.2)] text-[var(--text-dim)] font-mono">
+                              <th className="py-2 px-2.5">Entity</th>
+                              <th className="py-2 px-2.5">Confidence</th>
+                              <th className="py-2 px-2.5">Policy Action</th>
+                              <th className="py-2 px-2.5">Override Action</th>
+                              <th className="py-2 px-2.5">Justification</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[rgba(64,224,208,0.1)] text-slate-200">
+                            {scanResult.findings.map((f, idx) => {
+                              const isBlockAction = f.action === 'block';
+                              const currentOverride = overrides[idx];
+                              const chosenAction = currentOverride ? currentOverride.action : f.action;
+                              const isOverridden = currentOverride && currentOverride.action !== f.action;
+                              const color = getTypeColor(f.type);
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead>
-                          <tr className="border-b border-slate-800 text-slate-400 font-medium">
-                            <th className="py-2 px-2.5">Entity</th>
-                            <th className="py-2 px-2.5">Confidence</th>
-                            <th className="py-2 px-2.5">Policy Action</th>
-                            <th className="py-2 px-2.5">Override Action</th>
-                            <th className="py-2 px-2.5">Justification (Required)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                          {scanResult.findings.map((f, idx) => {
-                            const isBlockAction = f.action === 'block';
-                            const currentOverride = overrides[idx];
-                            const chosenAction = currentOverride ? currentOverride.action : f.action;
-                            const isOverridden = currentOverride && currentOverride.action !== f.action;
-                            const color = getTypeColor(f.type);
-
-                            return (
-                              <tr key={idx} className="hover:bg-slate-950/40 transition">
-                                <td className="py-2.5 px-2.5">
-                                  <span
-                                    className={`px-2 py-0.5 rounded text-[11px] font-mono border ${color.pill}`}
-                                  >
-                                    {f.type}
-                                  </span>
-                                </td>
-                                <td className="py-2.5 px-2.5 font-mono text-slate-400">
-                                  {Math.round(f.confidence * 100)}%
-                                </td>
-                                <td className="py-2.5 px-2.5">
-                                  <span
-                                    className={`px-2 py-0.5 rounded font-mono text-[11px] font-semibold ${
-                                      f.action === 'block'
-                                        ? 'bg-red-950 text-red-300 border border-red-800'
-                                        : f.action === 'mask'
-                                        ? 'bg-blue-950 text-blue-300 border border-blue-800'
-                                        : f.action === 'tokenize'
-                                        ? 'bg-purple-950 text-purple-300 border border-purple-800'
-                                        : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                                    }`}
-                                  >
-                                    {f.action}
-                                  </span>
-                                </td>
-                                <td className="py-2.5 px-2.5">
-                                  {isBlockAction ? (
-                                    <span className="text-red-300 text-[11px] italic">
-                                      Blocked (non-overridable)
+                              return (
+                                <tr key={idx} className="hover:bg-[rgba(45,212,191,0.04)] transition">
+                                  <td className="py-2.5 px-2.5">
+                                    <span className={`${color.pill} font-mono text-[10px]`}>
+                                      {f.type}
                                     </span>
-                                  ) : (
-                                    <select
-                                      value={chosenAction}
-                                      aria-label={`Override action for finding ${f.type}`}
-                                      onChange={(e) => {
-                                        const newAction = e.target.value as 'allow' | 'mask' | 'tokenize';
-                                        if (newAction === f.action) {
-                                          const next = { ...overrides };
-                                          delete next[idx];
-                                          setOverrides(next);
-                                        } else {
-                                          setOverrides({
-                                            ...overrides,
-                                            [idx]: {
-                                              action: newAction,
-                                              reason: overrides[idx]?.reason || '',
-                                            },
-                                          });
-                                        }
-                                      }}
-                                      className="bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400"
-                                    >
-                                      <option value={f.action}>Default ({f.action})</option>
-                                      {f.action !== 'allow' && <option value="allow">Allow</option>}
-                                      {f.action !== 'mask' && <option value="mask">Mask</option>}
-                                      {f.action !== 'tokenize' && <option value="tokenize">Tokenize</option>}
-                                    </select>
-                                  )}
-                                </td>
-                                <td className="py-2.5 px-2.5">
-                                  {!isBlockAction && isOverridden ? (
-                                    <div className="space-y-1">
-                                      <input
-                                        type="text"
-                                        value={currentOverride?.reason || ''}
-                                        aria-label={`Override reason for finding ${f.type}`}
-                                        onChange={(e) => {
-                                          setOverrides({
-                                            ...overrides,
-                                            [idx]: {
-                                              action: chosenAction as 'allow' | 'mask' | 'tokenize',
-                                              reason: e.target.value,
-                                            },
-                                          });
-                                        }}
-                                        placeholder="Reason for override (required)"
-                                        className={`w-full bg-slate-950 border rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-600 focus-visible:outline-none ${
-                                          !currentOverride?.reason.trim()
-                                            ? 'border-red-600 focus-visible:ring-1 focus-visible:ring-red-400'
-                                            : 'border-slate-800 focus-visible:ring-1 focus-visible:ring-emerald-400'
-                                        }`}
-                                      />
-                                      {!currentOverride?.reason.trim() && (
-                                        <p className="text-[10px] text-red-400">
-                                          Reason required to override.
-                                        </p>
-                                      )}
+                                  </td>
+                                  <td className="py-2.5 px-2.5">
+                                    {/* Confidence Bar (Requirement 3) */}
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-14 h-1.5 rounded-full bg-[rgba(4,11,20,0.9)] border border-[rgba(64,224,208,0.2)] overflow-hidden">
+                                        <div
+                                          className="h-full bg-[#2dd4bf] rounded-full"
+                                          style={{ width: `${Math.round(f.confidence * 100)}%` }}
+                                        />
+                                      </div>
+                                      <span className="font-mono text-[11px] text-[var(--text-dim)]">
+                                        {Math.round(f.confidence * 100)}%
+                                      </span>
                                     </div>
-                                  ) : (
-                                    <span className="text-slate-600 text-xs">—</span>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Send to AI Action Section */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-                        Forward Sanitized Prompt to AI
-                      </h4>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {isBlocked
-                          ? 'Blocked by safety policy. Edit your prompt to remove violations before continuing.'
-                          : 'Sanitized values will be vaulted ephemerally before reaching downstream AI.'}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleSend}
-                      disabled={isBlocked || isSending}
-                      aria-label="Send sanitized prompt to AI"
-                      className={`px-7 py-2.5 rounded-xl font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-lg transition focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-                        isBlocked || isSending
-                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950'
-                      }`}
-                    >
-                      {isSending ? (
-                        <>
-                          <span
-                            className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                            aria-hidden="true"
-                          />
-                          <span>Sending...</span>
-                        </>
-                      ) : isBlocked ? (
-                        <>
-                          <span aria-hidden="true">🚫</span>
-                          <span>Send Blocked by Policy</span>
-                        </>
-                      ) : (
-                        <>
-                          <span aria-hidden="true">🚀</span>
-                          <span>Send to AI</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Red Message Box right under Send button */}
-                  {sendError && (
-                    <div
-                      role="alert"
-                      className="p-4 rounded-xl bg-red-950/90 border border-red-700 text-red-200 text-xs sm:text-sm space-y-2 shadow-lg"
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <span className="text-red-400 text-base font-bold leading-none mt-0.5" aria-hidden="true">
-                          ⚠️
-                        </span>
-                        <div className="flex-1 space-y-1">
-                          <p className="font-semibold text-red-100">{sendError.message}</p>
-                          {sendError.reasons && sendError.reasons.length > 0 && (
-                            <ul className="list-disc list-inside space-y-1 text-xs text-red-300 pl-1">
-                              {sendError.reasons.map((reason, idx) => (
-                                <li key={idx}>{reason}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
+                                  </td>
+                                  <td className="py-2.5 px-2.5">
+                                    <span
+                                      className={`px-2 py-0.5 rounded font-mono text-[10px] uppercase font-bold border ${
+                                        f.action === 'block'
+                                          ? 'badge-critical'
+                                          : f.action === 'mask'
+                                          ? 'badge-medium'
+                                          : f.action === 'tokenize'
+                                          ? 'badge-low'
+                                          : 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                                      }`}
+                                    >
+                                      {f.action}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-2.5">
+                                    {/* Requirement 3: Blocked rows show lock icon & 'Edit your prompt to remove it' */}
+                                    {isBlockAction ? (
+                                      <div className="flex items-center gap-1.5 text-red-300 text-[11px] font-mono">
+                                        <span aria-hidden="true">🔒</span>
+                                        <span>Edit your prompt to remove it</span>
+                                      </div>
+                                    ) : (
+                                      <select
+                                        value={chosenAction}
+                                        aria-label={`Override action for finding ${f.type}`}
+                                        onChange={(e) => {
+                                          const newAction = e.target.value as 'allow' | 'mask' | 'tokenize';
+                                          if (newAction === f.action) {
+                                            const next = { ...overrides };
+                                            delete next[idx];
+                                            setOverrides(next);
+                                          } else {
+                                            setOverrides({
+                                              ...overrides,
+                                              [idx]: {
+                                                action: newAction,
+                                                reason: overrides[idx]?.reason || '',
+                                              },
+                                            });
+                                          }
+                                        }}
+                                        className="bg-[rgba(4,11,20,0.9)] border border-[var(--panel-border)] text-slate-200 text-xs rounded-lg px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#2dd4bf]"
+                                      >
+                                        <option value={f.action}>Default ({f.action})</option>
+                                        {f.action !== 'allow' && <option value="allow">Allow</option>}
+                                        {f.action !== 'mask' && <option value="mask">Mask</option>}
+                                        {f.action !== 'tokenize' && <option value="tokenize">Tokenize</option>}
+                                      </select>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 px-2.5">
+                                    {!isBlockAction && isOverridden ? (
+                                      <div className="space-y-1">
+                                        <input
+                                          type="text"
+                                          value={currentOverride?.reason || ''}
+                                          aria-label={`Override reason for finding ${f.type}`}
+                                          onChange={(e) => {
+                                            setOverrides({
+                                              ...overrides,
+                                              [idx]: {
+                                                action: chosenAction as 'allow' | 'mask' | 'tokenize',
+                                                reason: e.target.value,
+                                              },
+                                            });
+                                          }}
+                                          placeholder="Justification reason (required)"
+                                          className={`w-full bg-[rgba(4,11,20,0.9)] border rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-600 focus-visible:outline-none ${
+                                            !currentOverride?.reason.trim()
+                                              ? 'border-red-600 focus-visible:ring-1 focus-visible:ring-red-400'
+                                              : 'border-[var(--panel-border)] focus-visible:ring-1 focus-visible:ring-[#2dd4bf]'
+                                          }`}
+                                        />
+                                        {!currentOverride?.reason.trim() && (
+                                          <p className="text-[10px] text-red-400">
+                                            Reason required to override.
+                                          </p>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-600 text-xs">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
-                  )}
-                </div>
+                  </HudPanel>
+                )}
+
+                {/* Send Action Card */}
+                <HudPanel
+                  title="Forward Sanitized Prompt to AI"
+                  tag="FORWARD_CONTROL"
+                  brackets={true}
+                >
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs text-[var(--text-dim)]">
+                          {isBlocked
+                            ? 'Blocked by safety policy. Edit your prompt to remove violations before continuing.'
+                            : 'Sanitized prompt will be transmitted via secure gateway with reversible tokenization.'}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleSend}
+                        disabled={isBlocked || isSending}
+                        aria-label="Send sanitized prompt to AI"
+                        className={`px-7 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                          isBlocked || isSending
+                            ? 'bg-[rgba(10,28,44,0.6)] text-slate-500 cursor-not-allowed border border-[var(--panel-border)]'
+                            : 'bg-[#2dd4bf] hover:bg-[#14b8a6] text-slate-950 shadow-[0_0_20px_rgba(45,212,191,0.3)]'
+                        }`}
+                      >
+                        {isSending ? (
+                          <>
+                            <span
+                              className="w-4 h-4 border-2 border-slate-950/40 border-t-slate-950 rounded-full animate-spin"
+                              aria-hidden="true"
+                            />
+                            <span>Sending...</span>
+                          </>
+                        ) : isBlocked ? (
+                          <>
+                            <span aria-hidden="true">🚫</span>
+                            <span>Send Blocked by Policy</span>
+                          </>
+                        ) : (
+                          <>
+                            <span aria-hidden="true">🚀</span>
+                            <span>Send to AI</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Error Notice */}
+                    {sendError && (
+                      <div
+                        role="alert"
+                        className="p-4 rounded-xl bg-red-950/80 border border-red-700 text-red-200 text-xs sm:text-sm space-y-2 shadow-lg"
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <span className="text-red-400 text-base font-bold leading-none mt-0.5" aria-hidden="true">
+                            ⚠️
+                          </span>
+                          <div className="flex-1 space-y-1">
+                            <p className="font-semibold text-red-100">{sendError.message}</p>
+                            {sendError.reasons && sendError.reasons.length > 0 && (
+                              <ul className="list-disc list-inside space-y-1 text-xs text-red-300 pl-1">
+                                {sendError.reasons.map((reason, idx) => (
+                                  <li key={idx}>{reason}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </HudPanel>
               </div>
             )}
 
             {/* Requirement 5: Skeleton Loader while waiting for AI response */}
             {isSending && (
-              <div
-                ref={answerRef}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4"
-                role="status"
-                aria-live="polite"
-              >
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className="w-4 h-4 border-2 border-emerald-400/40 border-t-emerald-400 rounded-full animate-spin"
-                      aria-hidden="true"
-                    />
-                    <h3 className="text-sm font-bold text-white">
-                      {isRetrying ? 'The AI is busy, retrying...' : 'Downstream AI is processing...'}
-                    </h3>
-                  </div>
-                  <span className="text-xs font-mono text-slate-400">
-                    {isRetrying ? 'Exponential backoff' : 'Generating response'}
-                  </span>
-                </div>
+              <div ref={answerRef}>
+                <HudPanel
+                  title="Downstream AI Response"
+                  tag="LLM_DISPATCH"
+                  brackets={true}
+                >
+                  <div className="space-y-4" role="status" aria-live="polite">
+                    <div className="flex items-center justify-between border-b border-[rgba(64,224,208,0.18)] pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className="w-4 h-4 border-2 border-[#2dd4bf]/40 border-t-[#2dd4bf] rounded-full animate-spin"
+                          aria-hidden="true"
+                        />
+                        <h3 className="text-sm font-bold text-white font-mono">
+                          {isRetrying ? 'The AI is busy, retrying...' : 'Downstream AI is generating response...'}
+                        </h3>
+                      </div>
+                      <span className="hud-label font-mono text-[10px]">
+                        {isRetrying ? 'RESILIENCE BACKOFF' : 'IN_FLIGHT'}
+                      </span>
+                    </div>
 
-                <div className="space-y-3 pt-1">
-                  <div className="h-4 bg-slate-800/80 rounded w-4/5 animate-pulse" />
-                  <div className="h-4 bg-slate-800/80 rounded w-full animate-pulse" />
-                  <div className="h-4 bg-slate-800/80 rounded w-3/4 animate-pulse" />
-                  <div className="h-4 bg-slate-800/80 rounded w-2/3 animate-pulse" />
-                </div>
+                    {/* Skeleton lines */}
+                    <div className="space-y-3 pt-1">
+                      <div className="h-4 bg-[rgba(45,212,191,0.12)] rounded w-4/5 animate-pulse" />
+                      <div className="h-4 bg-[rgba(45,212,191,0.12)] rounded w-full animate-pulse" />
+                      <div className="h-4 bg-[rgba(45,212,191,0.12)] rounded w-3/4 animate-pulse" />
+                      <div className="h-4 bg-[rgba(45,212,191,0.12)] rounded w-2/3 animate-pulse" />
+                    </div>
 
-                {/* Gemini resilience retry banner */}
-                {isRetrying && (
-                  <div className="p-3 bg-amber-950/70 border border-amber-700/80 rounded-xl text-xs text-amber-200 flex items-center gap-2">
-                    <span className="text-amber-400 animate-spin" aria-hidden="true">⏳</span>
-                    <span>The AI is busy, retrying... (automatic exponential retry in progress)</span>
+                    {/* Requirement 5: Retrying Note */}
+                    {isRetrying && (
+                      <div className="p-3 bg-amber-950/70 border border-amber-700/80 rounded-xl text-xs text-amber-200 flex items-center gap-2">
+                        <span className="text-amber-400 animate-spin" aria-hidden="true">⏳</span>
+                        <span>The AI is busy, retrying... (automatic exponential retry in progress)</span>
+                      </div>
+                    )}
                   </div>
-                )}
+                </HudPanel>
               </div>
             )}
 
-            {/* Step 3: Model Answer Section */}
+            {/* Requirement 5: Answer Panel with Copy button & Collapsed 'What the AI actually saw' */}
             {sendResult && (
-              <div
-                ref={answerRef}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4"
-              >
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div>
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-white flex items-center gap-2">
-                      <span className="text-emerald-400" aria-hidden="true">✨</span>
-                      <span>3. Model Answer (Restored)</span>
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Vaulted surrogate placeholders have been transparently re-hydrated in the model response.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                      Status: OK
-                    </span>
-
-                    {/* Requirement 6: Copy Button */}
+              <div ref={answerRef}>
+                <HudPanel
+                  title="Model Answer (Rehydrated)"
+                  tag="RESTORE_SUCCESS"
+                  brackets={true}
+                  status="ok"
+                  statusLabel="RESTORED"
+                  headerAction={
                     <button
                       type="button"
                       onClick={handleCopyAnswer}
                       aria-label="Copy AI response to clipboard"
-                      className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 flex items-center gap-1.5 transition focus-visible:ring-2 focus-visible:ring-emerald-400"
+                      className="px-3 py-1 rounded-lg bg-[rgba(10,28,44,0.85)] hover:bg-[rgba(45,212,191,0.15)] border border-[rgba(64,224,208,0.25)] hover:border-[#2dd4bf] text-xs text-slate-200 flex items-center gap-1.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
                     >
                       {copied ? (
                         <>
-                          <span className="text-emerald-400" aria-hidden="true">✓</span>
+                          <span className="text-[#2dd4bf]" aria-hidden="true">✓</span>
                           <span>Copied!</span>
                         </>
                       ) : (
@@ -1351,112 +1360,113 @@ export default function PlaygroundPage() {
                         </>
                       )}
                     </button>
-                  </div>
-                </div>
-
-                {/* Model Response (Plain Text) */}
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-slate-100">
-                  <pre className="whitespace-pre-wrap font-sans text-xs sm:text-sm leading-relaxed">
-                    {sendResult.answer}
-                  </pre>
-                </div>
-
-                {/* Requirement 6: Collapsible 'What the AI actually saw' (collapsed by default) */}
-                <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/60">
-                  <button
-                    type="button"
-                    onClick={() => setIsAiDetailsOpen(!isAiDetailsOpen)}
-                    aria-expanded={isAiDetailsOpen}
-                    aria-label="Toggle what the AI actually saw section"
-                    className="w-full px-4 py-3 bg-slate-950 text-slate-300 hover:text-white flex items-center justify-between text-xs font-semibold uppercase tracking-wider transition focus-visible:ring-2 focus-visible:ring-emerald-400"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-emerald-400 font-mono" aria-hidden="true">
-                        {isAiDetailsOpen ? '▼' : '▶'}
-                      </span>
-                      <span>What the AI actually saw</span>
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 lowercase font-normal">
-                        {sendResult.tokenMap.length} {sendResult.tokenMap.length === 1 ? 'token' : 'tokens'} vaulted
-                      </span>
+                  }
+                >
+                  <div className="space-y-4">
+                    {/* Model Response Plain Text Output */}
+                    <div className="p-4 bg-[rgba(4,11,20,0.85)] rounded-xl border border-[rgba(64,224,208,0.18)] text-[var(--text)]">
+                      <pre className="whitespace-pre-wrap font-sans text-xs sm:text-sm leading-relaxed">
+                        {sendResult.answer}
+                      </pre>
                     </div>
-                    <span className="text-[11px] text-slate-500 font-mono">
-                      {isAiDetailsOpen ? 'Hide' : 'Expand'}
-                    </span>
-                  </button>
 
-                  {isAiDetailsOpen && (
-                    <div className="p-4 space-y-4 border-t border-slate-800 text-xs">
-                      <div>
-                        <h5 className="font-semibold text-slate-400 mb-1.5 uppercase text-[10px]">
-                          Sanitized Prompt Transmitted to LLM:
-                        </h5>
-                        <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
-                          {sendResult.sanitizedPrompt}
+                    {/* Requirement 5: Collapsed 'What the AI actually saw' section */}
+                    <div className="border border-[rgba(64,224,208,0.2)] rounded-xl overflow-hidden bg-[rgba(4,11,20,0.65)]">
+                      <button
+                        type="button"
+                        onClick={() => setIsAiDetailsOpen(!isAiDetailsOpen)}
+                        aria-expanded={isAiDetailsOpen}
+                        aria-label="Toggle what the AI actually saw section"
+                        className="w-full px-4 py-3 bg-[rgba(4,11,20,0.9)] text-slate-300 hover:text-white flex items-center justify-between text-xs font-semibold uppercase tracking-wider transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2dd4bf]"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-[#2dd4bf] font-mono" aria-hidden="true">
+                            {isAiDetailsOpen ? '▼' : '▶'}
+                          </span>
+                          <span className="hud-label text-slate-200">What the AI actually saw</span>
+                          <span className="badge-low text-[9px]">
+                            {sendResult.tokenMap.length} {sendResult.tokenMap.length === 1 ? 'token' : 'tokens'} vaulted
+                          </span>
                         </div>
-                      </div>
+                        <span className="text-[11px] text-[var(--text-dim)] font-mono">
+                          {isAiDetailsOpen ? 'Hide' : 'Expand'}
+                        </span>
+                      </button>
 
-                      <div>
-                        <h5 className="font-semibold text-slate-400 mb-1.5 uppercase text-[10px]">
-                          Active Token Map (Identifiers Only — Raw Values Never Logged):
-                        </h5>
-                        {sendResult.tokenMap.length > 0 ? (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                            {sendResult.tokenMap.map((tm, i) => (
-                              <div
-                                key={i}
-                                className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between"
-                              >
-                                <span className="font-mono text-emerald-400 font-bold">
-                                  {tm.token}
-                                </span>
-                                <span className="text-slate-500 font-mono uppercase text-[10px]">
-                                  {tm.type}
-                                </span>
-                              </div>
-                            ))}
+                      {isAiDetailsOpen && (
+                        <div className="p-4 space-y-4 border-t border-[rgba(64,224,208,0.18)] text-xs">
+                          <div>
+                            <h5 className="hud-label mb-1.5 text-[10px]">
+                              Sanitized Prompt Transmitted to LLM:
+                            </h5>
+                            <div className="p-3 bg-[rgba(4,11,20,0.9)] rounded-lg border border-[rgba(64,224,208,0.18)] font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+                              {sendResult.sanitizedPrompt}
+                            </div>
                           </div>
-                        ) : (
-                          <p className="text-slate-500 text-xs italic">
-                            No tokens required. All findings were masked, allowed, or none were detected.
-                          </p>
-                        )}
-                      </div>
+
+                          <div>
+                            <h5 className="hud-label mb-1.5 text-[10px]">
+                              Active Token Map (Surrogate Identifiers Only):
+                            </h5>
+                            {sendResult.tokenMap.length > 0 ? (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                {sendResult.tokenMap.map((tm, i) => (
+                                  <div
+                                    key={i}
+                                    className="p-2.5 rounded-lg bg-[rgba(4,11,20,0.9)] border border-[rgba(64,224,208,0.18)] flex items-center justify-between"
+                                  >
+                                    <span className="font-mono text-[#2dd4bf] font-bold">
+                                      {tm.token}
+                                    </span>
+                                    <span className="hud-label text-[9px]">
+                                      {tm.type}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-slate-400 text-xs italic">
+                                No tokens required. All findings were masked, allowed, or none were detected.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                </HudPanel>
               </div>
             )}
           </div>
         </div>
       </main>
 
-      {/* Requirement 7: Sticky Action Bar on Mobile (when scanResult is ready) */}
-      {scanResult && !sendResult && (
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 p-3 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 z-40 flex items-center justify-between gap-3 shadow-2xl">
-          <div className="text-xs">
-            <span className="font-bold text-slate-200 block">Review Ready</span>
-            <span className="text-slate-400 text-[11px] font-mono">
-              Risk: {scanResult.risk.score}/100
-            </span>
-          </div>
+      {/* Requirement 7: Sticky Action Bar on Mobile */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 p-3 bg-[rgba(4,11,20,0.95)] backdrop-blur-md border-t border-[var(--panel-border)] z-40 flex items-center justify-between gap-3 shadow-2xl">
+        <div className="text-xs">
+          <span className="hud-label font-bold text-white block">
+            {scanResult ? 'Review Ready' : 'Console Ready'}
+          </span>
+          <span className="text-[var(--text-dim)] text-[10px] font-mono">
+            {scanResult ? `Risk Score: ${scanResult.risk.score}/100` : `${prompt.length}/4000 chars`}
+          </span>
+        </div>
 
+        {scanResult && !sendResult ? (
           <button
             type="button"
             onClick={handleSend}
             disabled={isBlocked || isSending}
             aria-label="Send sanitized prompt to AI"
-            className={`px-5 py-2.5 rounded-xl font-semibold text-xs flex items-center gap-1.5 shadow-lg transition focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+            className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
               isBlocked || isSending
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950'
+                : 'bg-[#2dd4bf] hover:bg-[#14b8a6] text-slate-950 shadow-[0_0_15px_rgba(45,212,191,0.3)]'
             }`}
           >
             {isSending ? (
               <>
-                <span
-                  className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                  aria-hidden="true"
-                />
+                <span className="w-3.5 h-3.5 border-2 border-slate-950/40 border-t-slate-950 rounded-full animate-spin" aria-hidden="true" />
                 <span>Sending...</span>
               </>
             ) : isBlocked ? (
@@ -1471,10 +1481,28 @@ export default function PlaygroundPage() {
               </>
             )}
           </button>
-        </div>
-      )}
-
-
+        ) : (
+          <button
+            type="button"
+            onClick={handleScan}
+            disabled={isScanning || !prompt.trim() || prompt.length > 4000}
+            aria-label="Scan prompt"
+            className="px-5 py-2.5 rounded-xl bg-[#2dd4bf] hover:bg-[#14b8a6] disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(45,212,191,0.3)] transition"
+          >
+            {isScanning ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-slate-950/40 border-t-slate-950 rounded-full animate-spin" aria-hidden="true" />
+                <span>Scanning...</span>
+              </>
+            ) : (
+              <>
+                <span aria-hidden="true">🔍</span>
+                <span>Scan Prompt</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

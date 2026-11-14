@@ -361,4 +361,67 @@ While YapShield achieves high accuracy on the benchmark suite, users and evaluat
 
 ---
 
+## 10. Cybersecurity Desktop-App UI/UX Showcase (Case Study)
+
+YapShield includes a dedicated, responsive case-study landing page section inspired by high-end cybersecurity desktop applications and SOC telemetry consoles, accessible at `/case-study`.
+
+### Visual Style & Design Tokens
+- **Theme**: Dark cybersecurity environment with deep background gradients (`#1c1c1e` to `#0e1a1f`).
+- **Typography**: Clean sans-serif system stack with uppercase tracked micro-labels, centered headings (~28px), and relaxed body text (`#b8bcc2`).
+- **Color Accents**:
+  - **Accent Red (`#ff2d4a`)**: Highlights, critical incident counters, alert badges, and animated divider lines.
+  - **Teal / Cyan Glow Palette (`#0b3b44`, `#11b5c4`, `#0a1f26`)**: Glassy dashboard panel borders, outer glows, and radar telemetry sweeps.
+  - **Isometric Data Chips**: Yellow (`#f59e0b`), Green (`#10b981`), and Crimson Red (`#ff2d4a`).
+
+### Page Structure (Top to Bottom)
+1. **Eyebrow**: `"CYBERSECURITY UI/UX DESIGN • ANIMATED WINDOWS DESKTOP APPLICATION"` with active ping indicator.
+2. **TagBar**: Slim bordered dark glassy pill with dot-separated capabilities: `"Managed Security App UI/UX • Animated Desktop Interface • Motion Design + Static Screen States"`.
+3. **IntroDivider**: Accent red divider line animating `scaleX: 0 -> 1` followed by a centered 3-line intro paragraph.
+4. **ChallengeApproach**: Two-column responsive block (separated by a thin vertical line on desktop, stacked on mobile) with red labels `"THE CHALLENGE"` and `"OUR APPROACH"`, headings, paragraphs, and telemetry metrics.
+5. **HeroDashboard**: Large (~1000px wide) rounded cyber console featuring an isometric 3D grid:
+   - **Radial Gauge (`Gauge.tsx`)**: Dual orange/green concentric rings with animated `strokeDashoffset`, smooth continuous rotation, and live sensor needle micro-jitter.
+   - **Floating 3D Cubes (`Cube.tsx`)**: Isometric multi-layered stacked cubes (yellow, green, red) featuring continuous 4–6s floating loops and subtle exploded-view layer separation.
+   - **Critical Alert Counter**: Glowing red card with ticket counter `"14"` and live incident isolation indicators.
+   - **Live Monospace Terminal**: Streaming feed typing real-time telemetry events (`0x00A1 [KERNEL_MONITOR] ...`) with blinking cursor.
+   - **Interactive 3D Stage**: Smooth mouse-move 3D tilt physics and scroll parallax.
+6. **AnimationSequence**: Red label `"ANIMATION SEQUENCE"` followed by an interactive horizontal timeline and filmstrip showcasing keyframes across the 5 security stages (Node Discovery, Radar Sweep, Exploded Inspection, Incident Lockdown, Hash Chain Recovery).
+
+### Component Architecture
+All components are modular, typed, and located under `components/case-study/`:
+- `components/case-study/Eyebrow.tsx`
+- `components/case-study/TagBar.tsx`
+- `components/case-study/IntroDivider.tsx`
+- `components/case-study/ChallengeApproach.tsx`
+- `components/case-study/HeroDashboard.tsx`
+- `components/case-study/Gauge.tsx`
+- `components/case-study/Cube.tsx`
+- `components/case-study/AnimationSequence.tsx`
+- `components/case-study/CaseStudyShowcase.tsx`
+- **Central Content Configuration**: `lib/caseStudyContent.ts` (all copy, headings, timecodes, metrics, and labels).
+
+### Motion & Accessibility
+- Powered by **Framer Motion** with GPU-accelerated transforms (`translate3d`, `scale`, `rotate`).
+- Fully respects `prefers-reduced-motion` through `useReducedMotion()`.
+
+### How to Run & Verify
+```bash
+# 1. Install dependencies (including framer-motion)
+npm install
+
+# 2. Run the Next.js development server
+npm run dev
+
+# 3. Open in browser:
+# - Case Study: http://localhost:3000/case-study
+# - Home Page:  http://localhost:3000
+# - Playground: http://localhost:3000/playground
+# - Dashboard:  http://localhost:3000/dashboard
+
+# 4. Verify test suite & build
+npm test
+npm run build
+```
+
+---
+
 *Built with security and privacy by design.* 🛡️

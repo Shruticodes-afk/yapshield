@@ -54,6 +54,12 @@ export default function Footer() {
             >
               Audit Dashboard
             </Link>
+            <Link
+              href="/case-study"
+              className="text-slate-300 hover:text-[#ff2d4a] transition-colors"
+            >
+              Case Study Showcase
+            </Link>
           </div>
         </div>
 

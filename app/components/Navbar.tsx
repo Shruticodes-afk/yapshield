@@ -12,6 +12,7 @@ export default function Navbar() {
     { label: 'Home', href: '/' },
     { label: 'Playground', href: '/playground' },
     { label: 'Dashboard', href: '/dashboard' },
+    { label: 'Case Study', href: '/case-study' },
   ];
 
   const isLinkActive = (href: string) => {

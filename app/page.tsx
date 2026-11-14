@@ -506,6 +506,13 @@ export default function Home() {
             >
               View Dashboard
             </Link>
+            <Link
+              href="/case-study"
+              className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-[#ff2d4a]/40 hover:border-[#ff2d4a] text-white font-semibold text-sm transition-colors flex items-center gap-2"
+            >
+              <span className="w-2 h-2 rounded-full bg-[#ff2d4a]" />
+              <span>Cybersecurity UI Case Study</span>
+            </Link>
           </div>
         </div>
       </section>
