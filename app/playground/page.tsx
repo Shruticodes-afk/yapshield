@@ -144,12 +144,17 @@ export default function PlaygroundPage() {
 
   // Prompt change handler: resets state to guarantee offset integrity
   const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setPrompt(e.target.value);
-    if (scanResult || sendResult || errorMessage || sendError) {
+    const val = e.target.value;
+    setPrompt(val);
+    if (val.length > 4000) {
+      setErrorMessage('Prompt exceeds maximum length of 4000 characters.');
+    } else if (errorMessage === 'Prompt exceeds maximum length of 4000 characters.') {
+      setErrorMessage(null);
+    }
+    if (scanResult || sendResult || sendError) {
       setScanResult(null);
       setOverrides({});
       setSendResult(null);
-      setErrorMessage(null);
       setSendError(null);
     }
   };
@@ -206,7 +211,21 @@ export default function PlaygroundPage() {
         }),
       });
 
+      if (response.status === 429) {
+        setErrorMessage('Too many requests, please wait a few minutes');
+        return;
+      }
+
       const data = await response.json();
+
+      if (response.status === 400) {
+        setErrorMessage(
+          data.message && data.message.includes('4000')
+            ? 'Prompt exceeds maximum length of 4000 characters.'
+            : data.message || 'Invalid prompt input.'
+        );
+        return;
+      }
 
       if (data.status === 'preview') {
         setScanResult(data);
@@ -233,6 +252,13 @@ export default function PlaygroundPage() {
   // Step 2: Send to AI (mode: 'send')
   const handleSend = async () => {
     if (!scanResult) return;
+
+    if (prompt.length > 4000) {
+      setSendError({
+        message: 'Prompt exceeds maximum length of 4000 characters.',
+      });
+      return;
+    }
 
     setIsSending(true);
     setIsRetrying(false);
@@ -285,7 +311,24 @@ export default function PlaygroundPage() {
         }),
       });
 
+      if (response.status === 429) {
+        setSendError({
+          message: 'Too many requests, please wait a few minutes',
+        });
+        return;
+      }
+
       const data = await response.json();
+
+      if (response.status === 400) {
+        setSendError({
+          message:
+            data.message && data.message.includes('4000')
+              ? 'Prompt exceeds maximum length of 4000 characters.'
+              : data.message || 'The gateway could not process this request.',
+        });
+        return;
+      }
 
       if (data.status === 'blocked') {
         setSendError({
@@ -661,7 +704,7 @@ export default function PlaygroundPage() {
                 <button
                   type="button"
                   onClick={handleScan}
-                  disabled={isScanning || !prompt.trim() || prompt.length > 4000}
+                  disabled={isScanning || !prompt.trim()}
                   className="btn-primary w-full"
                 >
                   {isScanning ? (
@@ -1045,7 +1088,7 @@ export default function PlaygroundPage() {
               <button
                 type="button"
                 onClick={handleScan}
-                disabled={isScanning || !prompt.trim() || prompt.length > 4000}
+                disabled={isScanning || !prompt.trim()}
                 className="btn-primary h-9 px-4 text-xs font-semibold"
               >
                 {isScanning ? 'Scanning...' : 'Scan Prompt'}

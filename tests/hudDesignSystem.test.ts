@@ -81,6 +81,24 @@ describe('HUD Design System Components', () => {
       );
       expect(noLabelHtml).not.toContain('MEDIUM');
     });
+
+    it('keeps text elements upright and applies -90deg rotation ONLY to arc elements group', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(RiskGauge, { score: 65, size: 100 })
+      );
+
+      // SVG itself should not be rotated
+      expect(html).not.toMatch(/<svg[^>]*class="[^"]*-rotate-90/);
+
+      // Arc elements should be wrapped in rotated <g>
+      expect(html).toMatch(/<g\s+transform="rotate\(-90\s+50\s+50\)"/);
+
+      // Text elements should be horizontal with middle/central alignment
+      expect(html).toContain('text-anchor="middle"');
+      expect(html).toContain('dominant-baseline="central"');
+      expect(html).toContain('>65</text>');
+      expect(html).toContain('>HIGH</text>');
+    });
   });
 
   describe('StatusDot Component', () => {

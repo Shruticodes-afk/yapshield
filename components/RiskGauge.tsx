@@ -89,57 +89,59 @@ export default function RiskGauge({
         width={size}
         height={size}
         viewBox={`0 0 ${size} ${size}`}
-        className="transform -rotate-90"
         aria-hidden="true"
       >
-        {/* Track Base Arc */}
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke="var(--surface-2, #171d26)"
-          strokeWidth={strokeWidth}
-          strokeDasharray={`${arcLength} ${circumference}`}
-          strokeLinecap="round"
-          transform={`rotate(150 ${center} ${center})`}
-        />
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke="var(--border, #243040)"
-          strokeWidth={strokeWidth}
-          strokeDasharray={`${arcLength} ${circumference}`}
-          strokeLinecap="round"
-          transform={`rotate(150 ${center} ${center})`}
-          opacity="0.6"
-        />
+        {/* Arc Elements */}
+        <g transform={`rotate(-90 ${center} ${center})`}>
+          {/* Track Base Arc */}
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke="var(--surface-2, #171d26)"
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${arcLength} ${circumference}`}
+            strokeLinecap="round"
+            transform={`rotate(150 ${center} ${center})`}
+          />
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke="var(--border, #243040)"
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${arcLength} ${circumference}`}
+            strokeLinecap="round"
+            transform={`rotate(150 ${center} ${center})`}
+            opacity="0.6"
+          />
 
-        {/* Foreground Colored Active Arc */}
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke={severity.color}
-          strokeWidth={strokeWidth}
-          strokeDasharray={`${arcLength} ${circumference}`}
-          strokeDashoffset={currentOffset}
-          strokeLinecap="round"
-          transform={`rotate(150 ${center} ${center})`}
-          style={{
-            transition: prefersReducedMotion
-              ? 'none'
-              : 'stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
-          }}
-        />
+          {/* Foreground Colored Active Arc */}
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke={severity.color}
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${arcLength} ${circumference}`}
+            strokeDashoffset={currentOffset}
+            strokeLinecap="round"
+            transform={`rotate(150 ${center} ${center})`}
+            style={{
+              transition: prefersReducedMotion
+                ? 'none'
+                : 'stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+          />
+        </g>
 
         {/* Central Display: Score Number */}
         <text
           x={center}
-          y={center - size * 0.04}
+          y={showLabel ? center - size * 0.04 : center}
           textAnchor="middle"
           dominantBaseline="central"
           style={{

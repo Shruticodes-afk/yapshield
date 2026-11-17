@@ -271,7 +271,7 @@ describe('Gateway Route Abuse Protection & Rate Limiting', () => {
   // 4. Prompt Length Limit (Max 4000 characters)
   // ---------------------------------------------------------------------------
   describe('Prompt Length Limit (4000 characters)', () => {
-    it('rejects prompts longer than 4000 characters with HTTP 400', async () => {
+    it('rejects prompts longer than 4000 characters with HTTP 400 in send mode', async () => {
       const longPrompt = 'a'.repeat(4001);
 
       const req = new NextRequest('http://localhost:3000/api/gateway', {
@@ -283,6 +283,29 @@ describe('Gateway Route Abuse Protection & Rate Limiting', () => {
         body: JSON.stringify({
           prompt: longPrompt,
           mode: 'send',
+        }),
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(400);
+
+      const json = await res.json();
+      expect(json.status).toBe('bad_input');
+      expect(json.message).toMatch(/4000/);
+    });
+
+    it('rejects prompts longer than 4000 characters with HTTP 400 in preview mode', async () => {
+      const longPrompt = 'a'.repeat(4001);
+
+      const req = new NextRequest('http://localhost:3000/api/gateway', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': '198.51.100.99',
+        },
+        body: JSON.stringify({
+          prompt: longPrompt,
+          mode: 'preview',
         }),
       });
 
