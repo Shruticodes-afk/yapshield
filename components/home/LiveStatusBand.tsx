@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { HudPanel, RiskGauge, CountUp } from '@/components';
+import PromptChain from '@/components/PromptChain';
 import type { PublicStatsResponse } from '@/lib/publicStats';
 
 export default function LiveStatusBand() {
@@ -104,12 +105,17 @@ export default function LiveStatusBand() {
 
   return (
     <HudPanel
-      title="Live System Status"
-      tag="AUDIT_VERIFIED"
+      title="Live system status"
       status={isChainValid ? 'ok' : 'critical'}
       statusLabel={isChainValid ? 'Chain Valid' : 'Tamper Detected'}
+      headerCenter={<PromptChain />}
       className="transition-colors"
     >
+      {/* Below 1024px: chain moves to its own full-width row under the header and scrolls horizontally */}
+      <div className="lg:hidden -mx-4 -mt-4 sm:-mx-5 sm:-mt-5 mb-6 border-b border-[var(--border)] bg-[var(--surface-2)]/40 p-3 sm:p-4 overflow-x-auto">
+        <PromptChain />
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 items-center">
         {/* Total Scans */}
         <div className="space-y-1">

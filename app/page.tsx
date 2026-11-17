@@ -1,7 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import HeroDemo from '@/components/HeroDemo';
+import PacketInspector from '@/components/PacketInspector';
 import LiveStatusBand from '@/components/home/LiveStatusBand';
 import Reveal from '@/components/Reveal';
 
@@ -79,9 +79,9 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Right Column: Three-Actor HeroDemo */}
+          {/* Right Column: Packet Inspection Gate Simulation */}
           <div className="lg:col-span-6">
-            <HeroDemo />
+            <PacketInspector />
           </div>
         </section>
 

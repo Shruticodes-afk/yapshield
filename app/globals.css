@@ -468,6 +468,186 @@ html[data-theme='light'] .badge-critical {
   animation: hudCardFadeSlide 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* =========================================================================
+   PROMPT CHAIN & PACKET INSPECTOR COMPOSITOR ANIMATIONS
+   Compositor-only animations: animate ONLY transform and opacity.
+   ========================================================================= */
+
+@keyframes packetTravel {
+  0% {
+    left: 0%;
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  85% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.hud-packet-travel {
+  animation: packetTravel 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Packet Inspector: YapShield Vertical Scanline Sweep */
+@keyframes scanlineSweep {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(270px);
+    opacity: 0;
+  }
+}
+
+.hud-scanline {
+  animation: scanlineSweep 3.6s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* Packet Inspector: 14s Deterministic Cycle (Transform and Opacity only) */
+@keyframes packetCleanMotion {
+  0% {
+    transform: translate3d(-10%, 0, 0);
+    opacity: 0;
+  }
+  2% {
+    opacity: 1;
+  }
+  15% {
+    transform: translate3d(50%, 0, 0);
+  }
+  28% {
+    transform: translate3d(86%, 0, 0);
+    opacity: 1;
+  }
+  32% {
+    transform: translate3d(92%, 0, 0);
+    opacity: 0;
+  }
+  32.1%, 100% {
+    transform: translate3d(-10%, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes packetSensitiveMotion {
+  0% {
+    transform: translate3d(-10%, 0, 0);
+    opacity: 0;
+  }
+  2% {
+    opacity: 1;
+  }
+  14% {
+    transform: translate3d(49%, 0, 0);
+  }
+  15.5% {
+    transform: translate3d(50%, 0, 0);
+  }
+  17% {
+    transform: translate3d(51%, 0, 0);
+  }
+  28% {
+    transform: translate3d(86%, 0, 0);
+    opacity: 1;
+  }
+  32% {
+    transform: translate3d(92%, 0, 0);
+    opacity: 0;
+  }
+  32.1%, 100% {
+    transform: translate3d(-10%, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes sensitiveRawFade {
+  0%, 14% {
+    opacity: 1;
+  }
+  16%, 100% {
+    opacity: 0;
+  }
+}
+
+@keyframes sensitiveTokenizedFade {
+  0%, 14.5% {
+    opacity: 0;
+  }
+  16%, 31% {
+    opacity: 1;
+  }
+  32%, 100% {
+    opacity: 0;
+  }
+}
+
+@keyframes packetAttackMotion {
+  0% {
+    transform: translate3d(-10%, 0, 0);
+    opacity: 0;
+  }
+  2% {
+    opacity: 1;
+  }
+  14%, 18% {
+    transform: translate3d(50%, 0, 0);
+    opacity: 1;
+  }
+  26% {
+    transform: translate3d(50%, 24px, 0);
+    opacity: 0;
+  }
+  26.1%, 100% {
+    transform: translate3d(-10%, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes attackBlockedFade {
+  0%, 13.5% {
+    opacity: 0;
+  }
+  14.5%, 25% {
+    opacity: 1;
+  }
+  26%, 100% {
+    opacity: 0;
+  }
+}
+
+@keyframes attackRawFade {
+  0%, 13.5% {
+    opacity: 1;
+  }
+  14.5%, 100% {
+    opacity: 0;
+  }
+}
+
+/* Pause control for Packet Inspector & Prompt Chain */
+.inspector-paused,
+.inspector-paused * {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

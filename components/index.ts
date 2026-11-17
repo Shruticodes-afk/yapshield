@@ -18,3 +18,9 @@ export type { RevealProps } from './Reveal';
 
 export { default as PageTransition } from './PageTransition';
 export type { PageTransitionProps } from './PageTransition';
+
+export { default as PromptChain } from './PromptChain';
+export type { PromptChainProps } from './PromptChain';
+
+export { default as PacketInspector } from './PacketInspector';
+export type { PacketInspectorProps } from './PacketInspector';

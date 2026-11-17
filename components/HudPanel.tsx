@@ -16,6 +16,8 @@ export interface HudPanelProps {
   statusLabel?: string;
   /** Right-aligned custom header action or controls */
   headerAction?: React.ReactNode;
+  /** Center content in the header bar (e.g. PromptChain) */
+  headerCenter?: React.ReactNode;
   /** Additional CSS class names for the outer wrapper */
   className?: string;
   /** Additional CSS class names for the content area */
@@ -32,11 +34,12 @@ export default function HudPanel({
   status,
   statusLabel,
   headerAction,
+  headerCenter,
   className = '',
   contentClassName = 'p-4 sm:p-5',
   as: Component = 'div',
 }: HudPanelProps) {
-  const hasHeader = Boolean(title || tag || status || headerAction);
+  const hasHeader = Boolean(title || tag || status || headerAction || headerCenter);
 
   return (
     <Component
@@ -45,7 +48,7 @@ export default function HudPanel({
       {/* Header Bar */}
       {hasHeader && (
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5 sm:py-3 border-b border-[var(--border)] bg-[var(--surface-2)] rounded-t-[7px]">
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0 flex-shrink-0">
             {tag && (
               <span className="text-xs text-[var(--text-dim)] font-mono font-medium">
                 {tag}
@@ -60,6 +63,12 @@ export default function HudPanel({
               </h4>
             )}
           </div>
+
+          {headerCenter && (
+            <div className="hidden lg:flex flex-1 items-center justify-center min-w-0 px-4">
+              {headerCenter}
+            </div>
+          )}
 
           <div className="flex items-center gap-2 flex-shrink-0">
             {status && (
