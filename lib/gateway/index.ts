@@ -12,6 +12,7 @@
  */
 
 import crypto from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { detectAll } from '../detectors';
 import { detectInjection } from '../detectors/injection';
 import { evaluate, applyPolicy, PRESETS, PolicyItem } from '../policy';
@@ -22,6 +23,7 @@ import {
   GatewayDeps,
   GatewayResult,
   GatewayFinding,
+  GatewayTimings,
 } from './types';
 import {
   GatewayStage,
@@ -33,6 +35,42 @@ export * from './types';
 export * from './gemini';
 export * from './logger';
 export * from './rateLimit';
+
+function round(val: number): number {
+  return Math.round(val * 100) / 100;
+}
+
+function buildTimingsObject(raw: {
+  validate: number;
+  detect: number;
+  policy: number;
+  vaultSave: number;
+  llm: number;
+  restore: number;
+  vaultRemove: number;
+  auditWrites: number;
+  total: number;
+  attempts: number;
+}): GatewayTimings {
+  return {
+    validate: round(raw.validate),
+    detect: round(raw.detect),
+    policy: round(raw.policy),
+    vaultSave: round(raw.vaultSave),
+    vault_save: round(raw.vaultSave),
+    'vault save': round(raw.vaultSave),
+    llm: round(raw.llm),
+    restore: round(raw.restore),
+    vaultRemove: round(raw.vaultRemove),
+    vault_remove: round(raw.vaultRemove),
+    'vault remove': round(raw.vaultRemove),
+    auditWrites: round(raw.auditWrites),
+    audit_writes: round(raw.auditWrites),
+    'audit writes': round(raw.auditWrites),
+    total: round(raw.total),
+    attempts: raw.attempts,
+  };
+}
 
 /**
  * Logs gateway errors with privacy guarantees:
@@ -125,47 +163,94 @@ export async function runGateway(
   input: GatewayInput,
   deps: GatewayDeps
 ): Promise<GatewayResult> {
+  const tStart = performance.now();
+  let tValidate = 0;
+  let tDetect = 0;
+  let tPolicy = 0;
+  let tVaultSave = 0;
+  let tLlm = 0;
+  let tRestore = 0;
+  let tVaultRemove = 0;
+  let tAuditWrites = 0;
+  let answeredModel: string | undefined;
+  let attemptCount = 0;
+
   let stage: GatewayStage = 'validate';
   let sanitizedPrompt = '';
+  let hasTokenize = false;
+  let requestId = '';
 
   try {
     // 1. Validation: non-empty string, max 20,000 characters
     stage = 'validate';
+    const tValStart = performance.now();
     if (
       !input ||
       typeof input.prompt !== 'string' ||
       input.prompt.trim().length === 0 ||
       input.prompt.length > 20000
     ) {
+      tValidate += performance.now() - tValStart;
       return {
         status: 'bad_input',
         message:
           'Prompt must be a non-empty string and cannot exceed 20,000 characters.',
+        timings: buildTimingsObject({
+          validate: tValidate,
+          detect: 0,
+          policy: 0,
+          vaultSave: 0,
+          llm: 0,
+          restore: 0,
+          vaultRemove: 0,
+          auditWrites: 0,
+          total: performance.now() - tStart,
+          attempts: 0,
+        }),
       };
     }
 
     if (input.mode !== 'preview' && input.mode !== 'send') {
+      tValidate += performance.now() - tValStart;
       return {
         status: 'bad_input',
         message: "Mode must be either 'preview' or 'send'.",
+        timings: buildTimingsObject({
+          validate: tValidate,
+          detect: 0,
+          policy: 0,
+          vaultSave: 0,
+          llm: 0,
+          restore: 0,
+          vaultRemove: 0,
+          auditWrites: 0,
+          total: performance.now() - tStart,
+          attempts: 0,
+        }),
       };
     }
+    tValidate += performance.now() - tValStart;
 
     // 2. Pick policy preset (defaults to Student)
     stage = 'policy';
+    const tPolStart = performance.now();
     const policyKey = input.policyName || 'Student';
     const policy = PRESETS[policyKey] || PRESETS.Student;
-
-    const requestId = crypto.randomUUID();
+    requestId = crypto.randomUUID();
+    tPolicy += performance.now() - tPolStart;
 
     // 3. Mode: Preview
     if (input.mode === 'preview') {
       stage = 'detect';
+      const tDetStart = performance.now();
       const detections = detectAll(input.prompt);
       const injection = detectInjection(input.prompt);
+      tDetect += performance.now() - tDetStart;
 
       stage = 'policy';
+      const tPolEvalStart = performance.now();
       const evaluation = evaluate(detections, injection, policy);
+      tPolicy += performance.now() - tPolEvalStart;
 
       const findings: GatewayFinding[] = evaluation.items.map((i) => ({
         type: i.detection.type,
@@ -184,6 +269,7 @@ export async function runGateway(
 
       // Record audit row with action 'scan'
       stage = 'audit';
+      const tAudStart = performance.now();
       const categories = Array.from(new Set(findings.map((f) => f.type)));
       await writeAudit(
         {
@@ -197,6 +283,33 @@ export async function runGateway(
         },
         deps.auditStore
       );
+      tAuditWrites += performance.now() - tAudStart;
+
+      const timings = buildTimingsObject({
+        validate: tValidate,
+        detect: tDetect,
+        policy: tPolicy,
+        vaultSave: 0,
+        llm: 0,
+        restore: 0,
+        vaultRemove: 0,
+        auditWrites: tAuditWrites,
+        total: performance.now() - tStart,
+        attempts: 0,
+      });
+
+      // Log numbers and stage names only, never prompt content
+      console.log('[gateway] timings', {
+        validate: timings.validate,
+        detect: timings.detect,
+        policy: timings.policy,
+        vaultSave: timings.vaultSave,
+        llm: timings.llm,
+        restore: timings.restore,
+        vaultRemove: timings.vaultRemove,
+        auditWrites: timings.auditWrites,
+        total: timings.total,
+      });
 
       return {
         status: 'preview',
@@ -206,16 +319,20 @@ export async function runGateway(
         findings,
         sanitizedPreview,
         prompt: input.prompt,
+        timings,
       };
     }
 
     // 4. Mode: Send
     // ALWAYS re-run detection on the server (never trust client findings)
     stage = 'detect';
+    const tDetStart = performance.now();
     const detections = detectAll(input.prompt);
     const injection = detectInjection(input.prompt);
+    tDetect += performance.now() - tDetStart;
 
     stage = 'policy';
+    const tPolEvalStart = performance.now();
     const evaluation = evaluate(detections, injection, policy);
 
     const items: PolicyItem[] = [...evaluation.items];
@@ -249,28 +366,9 @@ export async function runGateway(
           appliedOverrideCategories.push(override.type);
         }
       }
-
-      // Record audit row with action 'override' per override batch
-      if (overridesAppliedCount > 0) {
-        stage = 'audit';
-        const overridePreview = buildSanitizedPreview(input.prompt, items);
-        await writeAudit(
-          {
-            userId: input.userId ?? null,
-            action: 'override',
-            categories: Array.from(new Set(appliedOverrideCategories)),
-            riskScore: evaluation.risk.score,
-            decision: 'override',
-            maskedPrompt: overridePreview,
-            overrideCount: overridesAppliedCount,
-          },
-          deps.auditStore
-        );
-      }
     }
 
     // Recheck decision after overrides
-    stage = 'policy';
     const hasBlockedItem = items.some((item) => item.action === 'block');
     const injectionScore = injection?.score ?? 0;
     const injectionBlocked =
@@ -278,10 +376,12 @@ export async function runGateway(
       injectionScore >= policy.injectionThreshold;
 
     const isBlocked = hasBlockedItem || injectionBlocked;
+    tPolicy += performance.now() - tPolEvalStart;
 
     // If blocked: return blocked status, record audit row, do NOT call LLM
     if (isBlocked) {
       stage = 'audit';
+      const tAudStart = performance.now();
       const blockedPreview = buildSanitizedPreview(input.prompt, items);
       const blockedCategories = Array.from(
         new Set(
@@ -303,66 +403,251 @@ export async function runGateway(
         },
         deps.auditStore
       );
+      tAuditWrites += performance.now() - tAudStart;
+
+      const timings = buildTimingsObject({
+        validate: tValidate,
+        detect: tDetect,
+        policy: tPolicy,
+        vaultSave: 0,
+        llm: 0,
+        restore: 0,
+        vaultRemove: 0,
+        auditWrites: tAuditWrites,
+        total: performance.now() - tStart,
+        attempts: 0,
+      });
+
+      console.log('[gateway] timings', {
+        validate: timings.validate,
+        detect: timings.detect,
+        policy: timings.policy,
+        vaultSave: timings.vaultSave,
+        llm: timings.llm,
+        restore: timings.restore,
+        vaultRemove: timings.vaultRemove,
+        auditWrites: timings.auditWrites,
+        total: timings.total,
+      });
 
       return {
         status: 'blocked',
         reasons: evaluation.risk.reasons,
         risk: evaluation.risk,
+        timings,
       };
     }
 
-    // Otherwise: create sanitized prompt with applyPolicy
+    // Check if any items need tokenization (vault storage)
+    hasTokenize = items.some((item) => item.action === 'tokenize');
+
+    // Optimization 2a: Run independent operations in parallel with Promise.all
+    // (for example the audit 'override' write and the vault save)
     stage = 'vault';
-    const { sanitized, tokenMap } = await applyPolicy(
-      input.prompt,
-      items,
-      requestId,
-      deps.vaultStore
-    );
+    const overrideAuditPromise = (async () => {
+      if (overridesAppliedCount > 0) {
+        const tAudStart = performance.now();
+        const overridePreview = buildSanitizedPreview(input.prompt, items);
+        await writeAudit(
+          {
+            userId: input.userId ?? null,
+            action: 'override',
+            categories: Array.from(new Set(appliedOverrideCategories)),
+            riskScore: evaluation.risk.score,
+            decision: 'override',
+            maskedPrompt: overridePreview,
+            overrideCount: overridesAppliedCount,
+          },
+          deps.auditStore
+        );
+        tAuditWrites += performance.now() - tAudStart;
+      }
+    })();
+
+    const vaultSavePromise = (async () => {
+      // Optimization 2f: If prompt has no sensitive findings requiring tokenization,
+      // skip vault writes entirely!
+      if (!hasTokenize) {
+        const res = await applyPolicy(
+          input.prompt,
+          items,
+          requestId,
+          undefined
+        );
+        return res;
+      }
+
+      const tVaultStart = performance.now();
+      const res = await applyPolicy(
+        input.prompt,
+        items,
+        requestId,
+        deps.vaultStore
+      );
+      tVaultSave += performance.now() - tVaultStart;
+      return res;
+    })();
+
+    const [, policyResult] = await Promise.all([
+      overrideAuditPromise,
+      vaultSavePromise,
+    ]);
+
+    const { sanitized, tokenMap } = policyResult;
     sanitizedPrompt = sanitized;
 
     let completed = false;
     try {
       // Call LLM with sanitized prompt
       stage = 'llm';
-      const modelResponse = await deps.llm(sanitized);
+      const tLlmStart = performance.now();
+      const llmResult = await deps.llm(sanitized);
+      tLlm = performance.now() - tLlmStart;
+
+      let modelResponse: string;
+      if (typeof llmResult === 'string') {
+        modelResponse = llmResult;
+        answeredModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        attemptCount = 1;
+      } else if (typeof llmResult === 'object' && llmResult !== null) {
+        modelResponse = llmResult.text;
+        answeredModel =
+          llmResult.model || process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        attemptCount =
+          typeof llmResult.attempts === 'number' ? llmResult.attempts : 1;
+      } else {
+        modelResponse = String(llmResult);
+        answeredModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        attemptCount = 1;
+      }
 
       // Restore tokens in model response
       stage = 'restore';
-      const restoredAnswer = await restore(
-        modelResponse,
-        requestId,
-        deps.vaultStore
-      );
+      let restoredAnswer = modelResponse;
+      if (hasTokenize) {
+        const tRestoreStart = performance.now();
+        restoredAnswer = await restore(
+          modelResponse,
+          requestId,
+          deps.vaultStore
+        );
+        tRestore = performance.now() - tRestoreStart;
+      }
 
-      // Write audit row with action 'forward'
-      stage = 'audit';
+      completed = true;
+
+      const timings = buildTimingsObject({
+        validate: tValidate,
+        detect: tDetect,
+        policy: tPolicy,
+        vaultSave: tVaultSave,
+        llm: tLlm,
+        restore: tRestore,
+        vaultRemove: tVaultRemove,
+        auditWrites: tAuditWrites,
+        total: performance.now() - tStart,
+        attempts: attemptCount,
+      });
+
+      // Optimization 2b: Move non-critical work (the audit 'forward' write and vaultStore.remove)
+      // to run after the response is sent using waitUntil from @vercel/functions with a safe fallback
+      // to a normal await when it is unavailable.
       const forwardCategories = Array.from(
         new Set(items.map((i) => i.detection.type))
       );
-      await writeAudit(
-        {
-          userId: input.userId ?? null,
-          action: 'forward',
-          categories: forwardCategories,
-          riskScore: evaluation.risk.score,
-          decision: evaluation.decision,
-          maskedPrompt: sanitized,
-          overrideCount: overridesAppliedCount,
-        },
-        deps.auditStore
-      );
 
-      completed = true;
+      const backgroundTask = async () => {
+        // 1. Audit 'forward' write
+        const tAudStart = performance.now();
+        try {
+          await writeAudit(
+            {
+              userId: input.userId ?? null,
+              action: 'forward',
+              categories: forwardCategories,
+              riskScore: evaluation.risk.score,
+              decision: evaluation.decision,
+              maskedPrompt: sanitized,
+              overrideCount: overridesAppliedCount,
+            },
+            deps.auditStore
+          );
+        } catch (auditErr) {
+          logGatewayError('audit', auditErr);
+        }
+        const audDur = performance.now() - tAudStart;
+        tAuditWrites += audDur;
+        timings.auditWrites = round(tAuditWrites);
+        timings.audit_writes = timings.auditWrites;
+        timings['audit writes'] = timings.auditWrites;
+
+        // 2. Vault removal cleanup
+        if (hasTokenize) {
+          const tRemStart = performance.now();
+          try {
+            await deps.vaultStore.remove(requestId);
+          } catch {
+            // Ignore vault removal error to avoid crashing background work
+          }
+          const remDur = performance.now() - tRemStart;
+          tVaultRemove += remDur;
+          timings.vaultRemove = round(tVaultRemove);
+          timings.vault_remove = timings.vaultRemove;
+          timings['vault remove'] = timings.vaultRemove;
+        }
+
+        // Log final timings (numbers and stage names only, never prompt content)
+        console.log('[gateway] timings', {
+          validate: timings.validate,
+          detect: timings.detect,
+          policy: timings.policy,
+          vaultSave: timings.vaultSave,
+          llm: timings.llm,
+          restore: timings.restore,
+          vaultRemove: timings.vaultRemove,
+          auditWrites: timings.auditWrites,
+          total: round(performance.now() - tStart),
+          attempts: timings.attempts,
+        });
+      };
+
+      let scheduled = false;
+      if (deps.waitUntil && typeof deps.waitUntil === 'function') {
+        try {
+          deps.waitUntil(backgroundTask());
+          scheduled = true;
+        } catch {
+          scheduled = false;
+        }
+      } else if (process.env.NODE_ENV !== 'test') {
+        try {
+          const { waitUntil } = await import('@vercel/functions');
+          if (typeof waitUntil === 'function') {
+            waitUntil(backgroundTask());
+            scheduled = true;
+          }
+        } catch {
+          scheduled = false;
+        }
+      }
+
+      if (!scheduled) {
+        // Safe fallback to normal await when waitUntil is unavailable
+        await backgroundTask();
+      }
+
       return {
         status: 'ok',
         answer: restoredAnswer,
         risk: evaluation.risk,
         sanitizedPrompt: sanitized,
         tokenMap,
+        timings,
+        model: answeredModel,
+        attempts: attemptCount,
       };
     } finally {
-      if (!completed) {
+      if (!completed && hasTokenize) {
         try {
           await deps.vaultStore.remove(requestId);
         } catch {
@@ -379,6 +664,18 @@ export async function runGateway(
     return {
       status: 'error',
       message: 'Request blocked for safety',
+      timings: buildTimingsObject({
+        validate: tValidate,
+        detect: tDetect,
+        policy: tPolicy,
+        vaultSave: tVaultSave,
+        llm: tLlm,
+        restore: tRestore,
+        vaultRemove: tVaultRemove,
+        auditWrites: tAuditWrites,
+        total: performance.now() - tStart,
+        attempts: attemptCount,
+      }),
     };
   }
 }

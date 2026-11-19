@@ -152,13 +152,23 @@ function sleep(ms: number): Promise<void> {
  */
 export const MAX_TOTAL_BUDGET_MS = 50000;
 
+export interface GeminiLlmResult {
+  text: string;
+  model: string;
+  attempts: number;
+}
+
+export type GeminiLlmRunner = (
+  sanitizedPrompt: string
+) => Promise<string | GeminiLlmResult>;
+
 /**
  * Creates a Gemini LLM runner that executes inference on sanitized prompts
  * with retry resilience, optional model fallback, and request timeout.
  */
 export function makeGeminiLlm(
   options?: GeminiLlmOptions
-): (sanitizedPrompt: string) => Promise<string> {
+): GeminiLlmRunner {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -183,21 +193,28 @@ export function makeGeminiLlm(
     : NaN;
   const timeoutMs =
     options?.timeoutMs ??
-    (!isNaN(envTimeout) && envTimeout > 0 ? envTimeout : 15000);
+    (!isNaN(envTimeout) && envTimeout > 0 ? envTimeout : 12000);
 
   const retryDelays =
     options?.retryDelays ??
     (process.env.NODE_ENV === 'test' && !process.env.GEMINI_SLOW_RETRY
       ? [10, 20, 40]
-      : [1000, 2000, 4000]);
+      : [500, 1000, 2000]);
+
+  const generationConfig = {
+    maxOutputTokens: 1024,
+    thinkingConfig: { thinkingBudget: 0 },
+  };
 
   const genAI = options?.client || new GoogleGenerativeAI(apiKey);
   const primaryModel = genAI.getGenerativeModel(
-    { model: modelName },
+    { model: modelName, generationConfig },
     { timeout: timeoutMs }
   );
 
-  return async (sanitizedPrompt: string): Promise<string> => {
+  return async (
+    sanitizedPrompt: string
+  ): Promise<{ text: string; model: string; attempts: number } | string> => {
     const startTime = Date.now();
     let lastError: unknown;
 
@@ -224,7 +241,11 @@ export function makeGeminiLlm(
           return response.text();
         }, effectiveTimeout);
 
-        return text;
+        return {
+          text,
+          model: modelName,
+          attempts: attempt,
+        };
       } catch (error) {
         lastError = error;
         const status = getErrorStatus(error);
@@ -243,11 +264,62 @@ export function makeGeminiLlm(
           throw error;
         }
 
+        // Optimization 2d: Switch to GEMINI_FALLBACK_MODEL after the first 503 or 429
+        // instead of waiting through all backoffs on the overloaded primary model
+        if (
+          (status === 503 || status === 429) &&
+          fallbackModelName &&
+          fallbackModelName.trim().length > 0
+        ) {
+          const remainingForFallback = getRemainingBudget();
+          if (remainingForFallback > 0) {
+            const effectiveFallbackTimeout = Math.min(
+              timeoutMs,
+              remainingForFallback
+            );
+
+            try {
+              const fallbackModel = genAI.getGenerativeModel(
+                { model: fallbackModelName, generationConfig },
+                { timeout: effectiveFallbackTimeout }
+              );
+
+              const fallbackText = await withTimeout(async () => {
+                const result = await fallbackModel.generateContent(
+                  sanitizedPrompt
+                );
+                const response = await result.response;
+                return response.text();
+              }, effectiveFallbackTimeout);
+
+              return {
+                text: fallbackText,
+                model: fallbackModelName,
+                attempts: attempt + 1,
+              };
+            } catch (fallbackError) {
+              const fallbackStatus = getErrorStatus(fallbackError);
+              const isFallbackTimeout = isNetworkTimeout(fallbackError);
+              console.error(
+                '[gateway]',
+                'llm',
+                'fallback',
+                fallbackStatus !== undefined
+                  ? fallbackStatus
+                  : isFallbackTimeout
+                  ? 'timeout'
+                  : 'error'
+              );
+              throw fallbackError;
+            }
+          }
+        }
+
         // Wait with exponential backoff plus random jitter before next attempt
         if (attempt <= maxRetries) {
           const baseDelay =
             retryDelays[attempt - 1] ??
-            1000 * Math.pow(2, attempt - 1);
+            500 * Math.pow(2, attempt - 1);
           const jitter = Math.floor(
             Math.random() * (process.env.NODE_ENV === 'test' ? 5 : 200)
           );
@@ -260,7 +332,7 @@ export function makeGeminiLlm(
       }
     }
 
-    // 2. All retries on main model failed.
+    // 2. All retries on main model failed (and fallback not triggered earlier, e.g. timeouts).
     // Check if fallback model is configured and failures were 503 or 429.
     const lastStatus = getErrorStatus(lastError);
     if (
@@ -280,7 +352,7 @@ export function makeGeminiLlm(
 
       try {
         const fallbackModel = genAI.getGenerativeModel(
-          { model: fallbackModelName },
+          { model: fallbackModelName, generationConfig },
           { timeout: effectiveFallbackTimeout }
         );
 
@@ -290,7 +362,11 @@ export function makeGeminiLlm(
           return response.text();
         }, effectiveFallbackTimeout);
 
-        return text;
+        return {
+          text,
+          model: fallbackModelName,
+          attempts: maxRetries + 2,
+        };
       } catch (fallbackError) {
         const fallbackStatus = getErrorStatus(fallbackError);
         const isFallbackTimeout = isNetworkTimeout(fallbackError);

@@ -59,7 +59,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="antialiased bg-[var(--bg)] text-[var(--text)] min-h-screen flex flex-col font-sans selection:bg-[var(--accent)]/20 selection:text-[var(--text)]">
+      <body className="antialiased bg-[var(--bg)] text-[var(--text)] min-h-screen flex flex-col font-sans">
         <Navbar />
         <div className="flex-1 flex flex-col">{children}</div>
         <Footer />

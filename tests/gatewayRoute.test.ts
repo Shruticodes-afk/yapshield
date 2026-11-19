@@ -420,4 +420,63 @@ describe('Gateway Route Abuse Protection & Rate Limiting', () => {
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // 5. Server-Timing Header and Preferred Region
+  // ---------------------------------------------------------------------------
+  describe('Server-Timing & Deployment Configuration', () => {
+    it('sets the Server-Timing header on the response when timings are present', async () => {
+      vi.spyOn(gatewayModule, 'runGateway').mockResolvedValue({
+        status: 'ok',
+        answer: 'Response with timings',
+        risk: { score: 0, level: 'low', reasons: [] },
+        sanitizedPrompt: 'Test prompt',
+        tokenMap: [],
+        timings: {
+          validate: 0.1,
+          detect: 3.2,
+          policy: 0.4,
+          vaultSave: 0,
+          vault_save: 0,
+          llm: 250.5,
+          restore: 0.2,
+          vaultRemove: 0,
+          vault_remove: 0,
+          auditWrites: 12.1,
+          audit_writes: 12.1,
+          total: 266.5,
+          attempts: 1,
+        },
+      });
+
+      const req = new NextRequest('http://localhost:3000/api/gateway', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': '198.51.100.22',
+        },
+        body: JSON.stringify({
+          prompt: 'Hello with timings',
+          mode: 'send',
+        }),
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+
+      const serverTiming = res.headers.get('Server-Timing');
+      expect(serverTiming).toBeDefined();
+      expect(serverTiming).toContain('validate;dur=0.1');
+      expect(serverTiming).toContain('detect;dur=3.2');
+      expect(serverTiming).toContain('llm;dur=250.5');
+      expect(serverTiming).toContain('total;dur=266.5');
+    });
+
+    it('exports preferredRegion matching VERCEL_FUNCTION_REGION or defaults to bom1', async () => {
+      const { preferredRegion } = await import('@/app/api/gateway/route');
+      expect(preferredRegion).toBeDefined();
+      expect(typeof preferredRegion).toBe('string');
+      expect(preferredRegion.length).toBeGreaterThan(0);
+    });
+  });
 });

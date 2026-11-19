@@ -105,6 +105,42 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* High-contrast theme-aware text selection */
+::selection {
+  background-color: rgba(34, 211, 238, 0.35);
+  color: inherit;
+}
+
+html[data-theme='light'] ::selection {
+  background-color: rgba(8, 145, 178, 0.25);
+  color: inherit;
+}
+
+/* Ensure form controls and text panels are always selectable */
+textarea,
+input,
+pre,
+code,
+.select-text {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+/* Playground Prompt Textarea: min-height 220px mobile / 320px desktop, auto-grows up to 60vh, then scrolls, user-resizable handle */
+.playground-prompt-textarea {
+  min-height: 220px;
+  max-height: 60vh;
+  resize: vertical;
+  overflow-y: auto;
+  field-sizing: content;
+}
+
+@media (min-width: 1024px) {
+  .playground-prompt-textarea {
+    min-height: 320px;
+  }
+}
+
 /* Headings: IBM Plex Sans 600, tighter letter-spacing */
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-sans);

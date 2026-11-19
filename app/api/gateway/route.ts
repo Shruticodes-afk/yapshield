@@ -2,7 +2,11 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+// Region should match the Supabase project region (e.g. 'bom1' for Mumbai) to minimize DB roundtrip latency
+export const preferredRegion = process.env.VERCEL_FUNCTION_REGION || 'bom1';
+
 import { NextRequest, NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import {
   runGateway,
   GatewayInput,
@@ -16,6 +20,31 @@ import { makeGeminiLlm } from '@/lib/gateway/gemini';
 import { SupabaseVaultStore } from '@/lib/vault/supabaseStore';
 import { SupabaseAuditStore } from '@/lib/audit/supabaseStore';
 import { getServiceSupabase } from '@/lib/supabase';
+
+// Module-level singletons to reuse client connections across requests
+const defaultVaultStore = new SupabaseVaultStore();
+const defaultAuditStore = new SupabaseAuditStore();
+
+function formatServerTiming(timings: Record<string, number>): string {
+  const parts: string[] = [];
+  const keys = [
+    'validate',
+    'detect',
+    'policy',
+    'vaultSave',
+    'llm',
+    'restore',
+    'vaultRemove',
+    'auditWrites',
+    'total',
+  ];
+  for (const key of keys) {
+    if (typeof timings[key] === 'number') {
+      parts.push(`${key};dur=${timings[key]}`);
+    }
+  }
+  return parts.join(', ');
+}
 
 function logGatewayError(
   stage: GatewayStage,
@@ -118,7 +147,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Set up LLM instance
-    let llm: (prompt: string) => Promise<string>;
+    let llm: (prompt: string) => Promise<string | { text: string; model?: string; attempts?: number }>;
     try {
       llm = makeGeminiLlm();
     } catch (error) {
@@ -127,9 +156,6 @@ export async function POST(request: NextRequest) {
         throw new Error('LLM execution unavailable: missing GEMINI_API_KEY.');
       };
     }
-
-    const vaultStore = new SupabaseVaultStore();
-    const auditStore = new SupabaseAuditStore();
 
     stage = 'validate';
     const gatewayInput: GatewayInput = {
@@ -147,8 +173,9 @@ export async function POST(request: NextRequest) {
 
     const result = await runGateway(gatewayInput, {
       llm,
-      vaultStore,
-      auditStore,
+      vaultStore: defaultVaultStore,
+      auditStore: defaultAuditStore,
+      waitUntil,
     });
 
     // Map result statuses to HTTP response codes
@@ -163,11 +190,20 @@ export async function POST(request: NextRequest) {
       httpStatus = 500;
     }
 
+    const responseHeaders: Record<string, string> = {
+      'Cache-Control': 'no-store',
+    };
+
+    if (result.timings) {
+      const serverTiming = formatServerTiming(result.timings);
+      if (serverTiming) {
+        responseHeaders['Server-Timing'] = serverTiming;
+      }
+    }
+
     return NextResponse.json(result, {
       status: httpStatus,
-      headers: {
-        'Cache-Control': 'no-store',
-      },
+      headers: responseHeaders,
     });
   } catch (error) {
     // FAIL CLOSED: any unexpected unhandled error returns safe fail-closed error

@@ -28,8 +28,14 @@ export const createSupabaseClient = (): SupabaseClient => {
   );
 };
 
-// Server-only administrative Supabase client using Service Role key
+// Server-only administrative Supabase client using Service Role key (module-level singleton)
+let cachedServiceSupabase: SupabaseClient | null = null;
+
 export const getServiceSupabase = (): SupabaseClient => {
+  if (cachedServiceSupabase) {
+    return cachedServiceSupabase;
+  }
+
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
@@ -38,12 +44,14 @@ export const getServiceSupabase = (): SupabaseClient => {
     );
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
+  cachedServiceSupabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
     },
   });
+
+  return cachedServiceSupabase;
 };
 
 export default supabase;

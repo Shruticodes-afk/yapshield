@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { HudPanel, RiskGauge } from '@/components';
 
 type PolicyPreset = 'Student' | 'Developer' | 'Enterprise';
@@ -37,6 +37,17 @@ interface SendResponse {
   risk: RiskScore;
   sanitizedPrompt: string;
   tokenMap: { token: string; type: string }[];
+  timings?: {
+    validate: number;
+    detect: number;
+    policy: number;
+    vaultSave?: number;
+    llm: number;
+    restore: number;
+    vaultRemove?: number;
+    auditWrites?: number;
+    total: number;
+  };
 }
 
 interface OverrideState {
@@ -108,6 +119,283 @@ function getEntityHighlightClass(type: string): string {
   }
 }
 
+interface PipelineStripProps {
+  isRetrying: boolean;
+  pipelineStatusText: string;
+  pipelineProgress: number;
+  pipelineCompletedCount: number;
+  pipelineActiveIndex: number;
+  isBlocked: boolean;
+}
+
+const PipelineStrip = React.memo(function PipelineStrip({
+  isRetrying,
+  pipelineStatusText,
+  pipelineProgress,
+  pipelineCompletedCount,
+  pipelineActiveIndex,
+  isBlocked,
+}: PipelineStripProps) {
+  return (
+    <div className="hud-panel p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+        <span className="hud-label select-none">Security Pipeline</span>
+        {isRetrying ? (
+          <span className="text-amber-500 dark:text-amber-300 font-medium inline-flex items-center gap-1.5 animate-pulse select-none">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            The AI is busy, retrying...
+          </span>
+        ) : (
+          <span className="text-[var(--text-dim)] font-sans text-xs select-none">
+            {pipelineStatusText}
+          </span>
+        )}
+      </div>
+
+      {/* Progress track */}
+      <div className="relative pt-2 pb-2">
+        <div
+          className="absolute top-1/2 -translate-y-1/2 left-3 right-3 h-0.5 bg-[var(--border)]"
+          aria-hidden="true"
+        >
+          <div
+            className="h-full bg-[var(--accent)] transition-all duration-500 ease-out"
+            style={{ width: `${pipelineProgress}%` }}
+          />
+        </div>
+
+        {/* Stage Nodes */}
+        <div className="relative flex items-center justify-between z-10">
+          {PIPELINE_STAGES.map((st, idx) => {
+            const isCompleted = idx < pipelineCompletedCount;
+            const isActive = idx === pipelineActiveIndex;
+            const isBlockedStage = isBlocked && idx === 3;
+
+            return (
+              <div key={st.id} className="flex flex-col items-center gap-1">
+                <div
+                  className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-mono font-bold transition-all select-none ${
+                    isCompleted
+                      ? 'bg-[var(--accent)] text-[var(--bg)] shadow-xs'
+                      : isBlockedStage
+                      ? 'bg-rose-500 text-white'
+                      : isActive
+                      ? 'bg-[var(--surface)] border-2 border-[var(--accent)] text-[var(--accent)]'
+                      : 'bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text-dim)]'
+                  }`}
+                >
+                  {isCompleted ? (
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : isBlockedStage ? (
+                    '✕'
+                  ) : (
+                    <span>{idx + 1}</span>
+                  )}
+                </div>
+                <span
+                  className={`text-[11px] font-mono tracking-tight select-none ${
+                    isActive || isCompleted
+                      ? 'text-[var(--text)] font-semibold'
+                      : isBlockedStage
+                      ? 'text-rose-500 font-semibold'
+                      : 'text-[var(--text-dim)]'
+                  }`}
+                >
+                  {st.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface InputConsoleProps {
+  prompt: string;
+  onPromptChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onSelectExample: (text: string) => void;
+  policyName: PolicyPreset;
+  onPolicyChange: (policy: PolicyPreset) => void;
+  onScan: () => void;
+  isScanning: boolean;
+  errorMessage: string | null;
+}
+
+const InputConsole = React.memo(function InputConsole({
+  prompt,
+  onPromptChange,
+  onSelectExample,
+  policyName,
+  onPolicyChange,
+  onScan,
+  isScanning,
+  errorMessage,
+}: InputConsoleProps) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const adjustTextareaHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    // Chromium native auto-sizing via CSS field-sizing: content
+    if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('field-sizing', 'content')) {
+      return;
+    }
+
+    // Firefox & fallback auto-sizing
+    const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 1024;
+    const minHeight = isDesktop ? 320 : 220;
+    const maxHeight = typeof window !== 'undefined' ? window.innerHeight * 0.6 : 600;
+
+    const previousScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+    el.style.height = 'auto';
+    const computedHeight = Math.max(minHeight, Math.min(el.scrollHeight, maxHeight));
+    el.style.height = `${computedHeight}px`;
+
+    if (typeof window !== 'undefined' && window.scrollY !== previousScrollY) {
+      window.scrollTo({ top: previousScrollY });
+    }
+  }, []);
+
+  useEffect(() => {
+    adjustTextareaHeight();
+  }, [prompt, adjustTextareaHeight]);
+
+  useEffect(() => {
+    const handleResize = () => adjustTextareaHeight();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [adjustTextareaHeight]);
+
+  return (
+    <HudPanel
+      title="Input Prompt"
+      tag="PAYLOAD"
+      className="h-full flex flex-col"
+      contentClassName="p-4 sm:p-5 flex-1 flex flex-col"
+    >
+      <div className="flex-1 flex flex-col space-y-4">
+        {/* Top: Prompt text */}
+        <div className="space-y-1.5 flex-shrink-0">
+          <div className="flex items-center justify-between text-xs font-mono">
+            <label htmlFor="promptInput" className="hud-label select-none">
+              Prompt text
+            </label>
+            <span
+              className={
+                prompt.length > 4000
+                  ? 'text-red-500 font-semibold'
+                  : 'text-[var(--text-dim)]'
+              }
+            >
+              {prompt.length} / 4000
+            </span>
+          </div>
+
+          <textarea
+            ref={textareaRef}
+            id="promptInput"
+            value={prompt}
+            onChange={onPromptChange}
+            placeholder="Enter prompt to scan..."
+            className={`playground-prompt-textarea w-full min-h-[220px] lg:min-h-[320px] max-h-[60vh] resize-y overflow-y-auto bg-[var(--bg)] border rounded-lg p-3 text-sm font-mono text-[var(--text)] placeholder:text-[var(--text-dim)]/50 focus-visible:outline-none transition-colors leading-relaxed select-text ${
+              prompt.length > 4000
+                ? 'border-red-600 focus-visible:ring-1 focus-visible:ring-red-400'
+                : 'border-[var(--border)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]'
+            }`}
+          />
+        </div>
+
+        {/* Middle: Examples (Fake Data) */}
+        <div className="space-y-2 pt-3 border-t border-[var(--border)] flex-shrink-0">
+          <span className="hud-label text-xs block select-none">Examples (Fake Data)</span>
+          <div className="flex flex-wrap gap-2">
+            {THREE_EXAMPLES.map((ex) => (
+              <button
+                key={ex.id}
+                type="button"
+                onClick={() => onSelectExample(ex.text)}
+                className="px-2.5 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)] text-xs text-[var(--text)] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+              >
+                {ex.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Middle: Policy Preset Selection */}
+        <div className="space-y-2 pt-3 border-t border-[var(--border)] flex-shrink-0">
+          <label className="hud-label text-xs block select-none">
+            Policy Preset
+          </label>
+
+          <div
+            role="radiogroup"
+            aria-label="Policy preset"
+            className="grid grid-cols-3 gap-1 p-1 bg-[var(--surface-2)] border border-[var(--border)] rounded-md font-mono text-xs"
+          >
+            {(['Student', 'Developer', 'Enterprise'] as PolicyPreset[]).map((pol) => {
+              const isSelected = policyName === pol;
+              return (
+                <button
+                  key={pol}
+                  type="button"
+                  role="radio"
+                  aria-checked={isSelected}
+                  onClick={() => onPolicyChange(pol)}
+                  className={`py-1.5 px-2 rounded text-center transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
+                    isSelected
+                      ? 'bg-[var(--surface)] text-[var(--accent)] font-semibold border border-[var(--border)] shadow-xs'
+                      : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {pol}
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="text-xs text-[var(--text-dim)] leading-relaxed">
+            {POLICY_HELP_TEXT[policyName]}
+          </p>
+        </div>
+
+        {/* Bottom: Pinned Scan Button */}
+        <div className="mt-auto pt-4 space-y-3 flex-shrink-0">
+          <button
+            type="button"
+            onClick={onScan}
+            disabled={isScanning || !prompt.trim()}
+            className="btn-primary w-full"
+          >
+            {isScanning ? (
+              <>
+                <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+                <span>Scanning prompt...</span>
+              </>
+            ) : (
+              'Scan Prompt'
+            )}
+          </button>
+
+          {errorMessage && (
+            <div
+              role="alert"
+              className="p-3 rounded bg-red-500/10 border border-red-500/40 text-red-600 dark:text-red-300 text-xs"
+            >
+              {errorMessage}
+            </div>
+          )}
+        </div>
+      </div>
+    </HudPanel>
+  );
+});
+
 export default function PlaygroundPage() {
   const [policyName, setPolicyName] = useState<PolicyPreset>('Student');
   // Prompt kept strictly in React memory (never in localStorage or sessionStorage)
@@ -143,46 +431,44 @@ export default function PlaygroundPage() {
   }, [sendResult]);
 
   // Prompt change handler: resets state to guarantee offset integrity
-  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setPrompt(val);
     if (val.length > 4000) {
       setErrorMessage('Prompt exceeds maximum length of 4000 characters.');
-    } else if (errorMessage === 'Prompt exceeds maximum length of 4000 characters.') {
-      setErrorMessage(null);
+    } else {
+      setErrorMessage((prev) =>
+        prev === 'Prompt exceeds maximum length of 4000 characters.' ? null : prev
+      );
     }
-    if (scanResult || sendResult || sendError) {
-      setScanResult(null);
-      setOverrides({});
-      setSendResult(null);
-      setSendError(null);
-    }
-  };
+    setScanResult(null);
+    setOverrides({});
+    setSendResult(null);
+    setSendError(null);
+  }, []);
 
   // Policy selector handler
-  const handlePolicyChange = (newPolicy: PolicyPreset) => {
+  const handlePolicyChange = useCallback((newPolicy: PolicyPreset) => {
     setPolicyName(newPolicy);
-    if (scanResult || sendResult || errorMessage || sendError) {
-      setScanResult(null);
-      setOverrides({});
-      setSendResult(null);
-      setErrorMessage(null);
-      setSendError(null);
-    }
-  };
+    setScanResult(null);
+    setOverrides({});
+    setSendResult(null);
+    setErrorMessage(null);
+    setSendError(null);
+  }, []);
 
   // Example prompt selector: fills textarea only, never auto-sends
-  const handleSelectExample = (exampleText: string) => {
+  const handleSelectExample = useCallback((exampleText: string) => {
     setPrompt(exampleText);
     setScanResult(null);
     setOverrides({});
     setSendResult(null);
     setErrorMessage(null);
     setSendError(null);
-  };
+  }, []);
 
   // Step 1: Scan Prompt (mode: 'preview')
-  const handleScan = async () => {
+  const handleScan = useCallback(async () => {
     if (!prompt.trim()) {
       setErrorMessage('Please enter a non-empty prompt.');
       return;
@@ -247,7 +533,7 @@ export default function PlaygroundPage() {
     } finally {
       setIsScanning(false);
     }
-  };
+  }, [prompt, policyName]);
 
   // Step 2: Send to AI (mode: 'send')
   const handleSend = async () => {
@@ -376,7 +662,7 @@ export default function PlaygroundPage() {
   // Plain-text highlighting of findings with left-to-right underline wipe
   const renderHighlightedPrompt = (text: string, findings: Finding[]) => {
     if (!findings || findings.length === 0) {
-      return <span className="text-[var(--text)]">{text}</span>;
+      return <span className="text-[var(--text)] select-text">{text}</span>;
     }
 
     const sorted = [...findings].sort((a, b) => a.start - b.start);
@@ -386,7 +672,7 @@ export default function PlaygroundPage() {
     sorted.forEach((finding, idx) => {
       if (finding.start > lastIndex) {
         nodes.push(
-          <span key={`plain-${idx}`} className="text-[var(--text)]">
+          <span key={`plain-${idx}`} className="text-[var(--text)] select-text">
             {text.slice(lastIndex, finding.start)}
           </span>
         );
@@ -398,10 +684,10 @@ export default function PlaygroundPage() {
         nodes.push(
           <span
             key={`finding-${idx}-${finding.start}`}
-            className={`px-1 py-0.5 rounded font-mono underline-wipe inline-flex items-baseline gap-1 ${highlightClass}`}
+            className={`px-1 py-0.5 rounded font-mono underline-wipe inline items-baseline select-text ${highlightClass}`}
           >
-            <span>{chunk}</span>
-            <span className="text-[9px] uppercase tracking-wider font-mono opacity-80 border border-current px-1 py-0.2 rounded">
+            <span className="select-text">{chunk}</span>
+            <span className="text-[9px] uppercase tracking-wider font-mono opacity-80 border border-current px-1 py-0.2 rounded select-none inline-block ml-1">
               {finding.type}
             </span>
           </span>
@@ -412,7 +698,7 @@ export default function PlaygroundPage() {
 
     if (lastIndex < text.length) {
       nodes.push(
-        <span key="plain-tail" className="text-[var(--text)]">
+        <span key="plain-tail" className="text-[var(--text)] select-text">
           {text.slice(lastIndex)}
         </span>
       );
@@ -429,13 +715,13 @@ export default function PlaygroundPage() {
         return (
           <span
             key={i}
-            className="bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--accent)]/40 px-1.5 py-0.5 rounded font-semibold text-xs inline-block animate-fade-in transition-opacity duration-300"
+            className="bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--accent)]/40 px-1.5 py-0.5 rounded font-semibold text-xs inline-block animate-fade-in transition-opacity duration-300 select-text"
           >
             {part}
           </span>
         );
       }
-      return <span key={i}>{part}</span>;
+      return <span key={i} className="select-text">{part}</span>;
     });
   };
 
@@ -533,200 +819,31 @@ export default function PlaygroundPage() {
         </div>
 
         {/* Real Pipeline Strip */}
-        <div className="hud-panel p-4 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
-            <span className="hud-label">Security Pipeline</span>
-            {isRetrying ? (
-              <span className="text-amber-500 dark:text-amber-300 font-medium inline-flex items-center gap-1.5 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                The AI is busy, retrying...
-              </span>
-            ) : (
-              <span className="text-[var(--text-dim)] font-sans text-xs">
-                {pipelineStatusText}
-              </span>
-            )}
-          </div>
-
-          {/* Progress track */}
-          <div className="relative pt-2 pb-2">
-            <div
-              className="absolute top-1/2 -translate-y-1/2 left-3 right-3 h-0.5 bg-[var(--border)]"
-              aria-hidden="true"
-            >
-              <div
-                className="h-full bg-[var(--accent)] transition-all duration-500 ease-out"
-                style={{ width: `${pipelineProgress}%` }}
-              />
-            </div>
-
-            {/* Stage Nodes */}
-            <div className="relative flex items-center justify-between z-10">
-              {PIPELINE_STAGES.map((st, idx) => {
-                const isCompleted = idx < pipelineCompletedCount;
-                const isActive = idx === pipelineActiveIndex;
-                const isBlockedStage = isBlocked && idx === 3;
-
-                return (
-                  <div key={st.id} className="flex flex-col items-center gap-1">
-                    <div
-                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-mono font-bold transition-all ${
-                        isCompleted
-                          ? 'bg-[var(--accent)] text-[var(--bg)] shadow-xs'
-                          : isBlockedStage
-                          ? 'bg-rose-500 text-white'
-                          : isActive
-                          ? 'bg-[var(--surface)] border-2 border-[var(--accent)] text-[var(--accent)]'
-                          : 'bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text-dim)]'
-                      }`}
-                    >
-                      {isCompleted ? (
-                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      ) : isBlockedStage ? (
-                        '✕'
-                      ) : (
-                        <span>{idx + 1}</span>
-                      )}
-                    </div>
-                    <span
-                      className={`text-[11px] font-mono tracking-tight ${
-                        isActive || isCompleted
-                          ? 'text-[var(--text)] font-semibold'
-                          : isBlockedStage
-                          ? 'text-rose-500 font-semibold'
-                          : 'text-[var(--text-dim)]'
-                      }`}
-                    >
-                      {st.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <PipelineStrip
+          isRetrying={isRetrying}
+          pipelineStatusText={pipelineStatusText}
+          pipelineProgress={pipelineProgress}
+          pipelineCompletedCount={pipelineCompletedCount}
+          pipelineActiveIndex={pipelineActiveIndex}
+          isBlocked={isBlocked}
+        />
 
         {/* Two-Column Layout on Desktop, Stacked on Mobile */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start lg:items-stretch">
           {/* =========================================================================
               LEFT COLUMN: Input Console
              ========================================================================= */}
-          <div className="lg:col-span-5 space-y-6">
-            <HudPanel title="Input Prompt" tag="PAYLOAD" className="space-y-4">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <label htmlFor="promptInput" className="hud-label">
-                    Prompt text
-                  </label>
-                  <span
-                    className={
-                      prompt.length > 4000
-                        ? 'text-red-500 font-semibold'
-                        : 'text-[var(--text-dim)]'
-                    }
-                  >
-                    {prompt.length} / 4000
-                  </span>
-                </div>
-
-                <textarea
-                  id="promptInput"
-                  rows={8}
-                  value={prompt}
-                  onChange={handlePromptChange}
-                  placeholder="Enter prompt to scan..."
-                  className={`w-full bg-[var(--bg)] border rounded-lg p-3 text-sm font-mono text-[var(--text)] placeholder:text-[var(--text-dim)]/50 focus-visible:outline-none transition leading-relaxed ${
-                    prompt.length > 4000
-                      ? 'border-red-600 focus-visible:ring-1 focus-visible:ring-red-400'
-                      : 'border-[var(--border)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]'
-                  }`}
-                />
-              </div>
-
-              {/* Three small example buttons using fake data */}
-              <div className="space-y-2 pt-2 border-t border-[var(--border)]">
-                <span className="hud-label text-xs block">Examples (Fake Data)</span>
-                <div className="flex flex-wrap gap-2">
-                  {THREE_EXAMPLES.map((ex) => (
-                    <button
-                      key={ex.id}
-                      type="button"
-                      onClick={() => handleSelectExample(ex.text)}
-                      className="px-2.5 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)] text-xs text-[var(--text)] transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
-                    >
-                      {ex.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Policy choice segmented control */}
-              <div className="space-y-2 pt-2 border-t border-[var(--border)]">
-                <label className="hud-label text-xs block">
-                  Policy Preset
-                </label>
-
-                <div
-                  role="radiogroup"
-                  aria-label="Policy preset"
-                  className="grid grid-cols-3 gap-1 p-1 bg-[var(--surface-2)] border border-[var(--border)] rounded-md font-mono text-xs"
-                >
-                  {(['Student', 'Developer', 'Enterprise'] as PolicyPreset[]).map((pol) => {
-                    const isSelected = policyName === pol;
-                    return (
-                      <button
-                        key={pol}
-                        type="button"
-                        role="radio"
-                        aria-checked={isSelected}
-                        onClick={() => handlePolicyChange(pol)}
-                        className={`py-1.5 px-2 rounded text-center transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
-                          isSelected
-                            ? 'bg-[var(--surface)] text-[var(--accent)] font-semibold border border-[var(--border)] shadow-xs'
-                            : 'text-[var(--text-dim)] hover:text-[var(--text)]'
-                        }`}
-                      >
-                        {pol}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <p className="text-xs text-[var(--text-dim)] leading-relaxed">
-                  {POLICY_HELP_TEXT[policyName]}
-                </p>
-              </div>
-
-              {/* Scan Button */}
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={handleScan}
-                  disabled={isScanning || !prompt.trim()}
-                  className="btn-primary w-full"
-                >
-                  {isScanning ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true" />
-                      <span>Scanning prompt...</span>
-                    </>
-                  ) : (
-                    'Scan Prompt'
-                  )}
-                </button>
-              </div>
-
-              {errorMessage && (
-                <div
-                  role="alert"
-                  className="p-3 rounded bg-red-500/10 border border-red-500/40 text-red-600 dark:text-red-300 text-xs"
-                >
-                  {errorMessage}
-                </div>
-              )}
-            </HudPanel>
+          <div className="lg:col-span-5 flex flex-col h-full">
+            <InputConsole
+              prompt={prompt}
+              onPromptChange={handlePromptChange}
+              onSelectExample={handleSelectExample}
+              policyName={policyName}
+              onPolicyChange={handlePolicyChange}
+              onScan={handleScan}
+              isScanning={isScanning}
+              errorMessage={errorMessage}
+            />
           </div>
 
           {/* =========================================================================
@@ -814,14 +931,14 @@ export default function PlaygroundPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Original prompt with underline wipe */}
                   <HudPanel title="Original Prompt" tag={`${scanResult.findings.length} FINDINGS`} className="space-y-2">
-                    <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded min-h-[110px] max-h-[220px] overflow-auto text-xs leading-relaxed">
+                    <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded min-h-[110px] max-h-[220px] overflow-auto text-xs leading-relaxed select-text">
                       {renderHighlightedPrompt(prompt, scanResult.findings)}
                     </div>
                   </HudPanel>
 
                   {/* Sanitized prompt with token fade-in */}
                   <HudPanel title="Sanitized Prompt" tag="PROTECTED" className="space-y-2">
-                    <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded min-h-[110px] max-h-[220px] overflow-auto font-mono text-xs text-[var(--text)] whitespace-pre-wrap leading-relaxed">
+                    <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded min-h-[110px] max-h-[220px] overflow-auto font-mono text-xs text-[var(--text)] whitespace-pre-wrap leading-relaxed select-text">
                       {renderSanitizedPrompt(scanResult.sanitizedPreview)}
                     </div>
                   </HudPanel>
@@ -1008,11 +1125,17 @@ export default function PlaygroundPage() {
                         </button>
                       </div>
 
-                      <div className="mt-3 p-4 bg-[var(--bg)] rounded border border-[var(--border)] text-[var(--text)]">
-                        <pre className="whitespace-pre-wrap font-sans text-xs sm:text-sm leading-relaxed">
+                      <div className="mt-3 p-4 bg-[var(--bg)] rounded border border-[var(--border)] text-[var(--text)] select-text">
+                        <pre className="whitespace-pre-wrap font-sans text-xs sm:text-sm leading-relaxed select-text">
                           {sendResult.answer}
                         </pre>
                       </div>
+
+                      {sendResult.timings && (
+                        <p className="mt-2 text-xs font-mono text-[var(--text-dim)] select-none">
+                          Response time {((sendResult.timings.total ?? 0) / 1000).toFixed(1)} s (AI {((sendResult.timings.llm ?? 0) / 1000).toFixed(1)} s, rest {Math.max(0, ((sendResult.timings.total ?? 0) - (sendResult.timings.llm ?? 0)) / 1000).toFixed(1)} s)
+                        </p>
+                      )}
 
                       {/* 'What the AI received' collapsed by default */}
                       <div className="mt-4 border border-[var(--border)] rounded bg-[var(--bg)] overflow-hidden">
@@ -1020,7 +1143,7 @@ export default function PlaygroundPage() {
                           type="button"
                           onClick={() => setIsAiDetailsOpen(!isAiDetailsOpen)}
                           aria-expanded={isAiDetailsOpen}
-                          className="w-full px-3 py-2.5 bg-[var(--surface-2)] hover:bg-[var(--surface)] text-[var(--text-dim)] hover:text-[var(--text)] flex items-center justify-between text-xs transition font-mono"
+                          className="w-full px-3 py-2.5 bg-[var(--surface-2)] hover:bg-[var(--surface)] text-[var(--text-dim)] hover:text-[var(--text)] flex items-center justify-between text-xs transition font-mono select-none"
                         >
                           <span className="font-medium">
                             {isAiDetailsOpen ? '▼ ' : '▶ '} What the AI received
@@ -1033,16 +1156,16 @@ export default function PlaygroundPage() {
                         {isAiDetailsOpen && (
                           <div className="p-3 space-y-3 text-xs border-t border-[var(--border)] font-mono">
                             <div>
-                              <span className="text-[var(--text-dim)] block mb-1">
+                              <span className="text-[var(--text-dim)] block mb-1 select-none">
                                 Sanitized prompt sent to model:
                               </span>
-                              <div className="p-2.5 bg-[var(--surface-2)] border border-[var(--border)] rounded text-xs text-[var(--text)] whitespace-pre-wrap leading-relaxed">
+                              <div className="p-2.5 bg-[var(--surface-2)] border border-[var(--border)] rounded text-xs text-[var(--text)] whitespace-pre-wrap leading-relaxed select-text">
                                 {sendResult.sanitizedPrompt}
                               </div>
                             </div>
 
                             <div>
-                              <span className="text-[var(--text-dim)] block mb-1">
+                              <span className="text-[var(--text-dim)] block mb-1 select-none">
                                 Vault Token Mappings:
                               </span>
                               {sendResult.tokenMap.length > 0 ? (
@@ -1050,12 +1173,12 @@ export default function PlaygroundPage() {
                                   {sendResult.tokenMap.map((tm, i) => (
                                     <div
                                       key={i}
-                                      className="p-2 rounded bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-between"
+                                      className="p-2 rounded bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-between select-text"
                                     >
-                                      <span className="text-[var(--accent)] font-semibold">
+                                      <span className="text-[var(--accent)] font-semibold select-text">
                                         {tm.token}
                                       </span>
-                                      <span className="text-[10px] text-[var(--text-dim)] uppercase">
+                                      <span className="text-[10px] text-[var(--text-dim)] uppercase select-none">
                                         {tm.type}
                                       </span>
                                     </div>

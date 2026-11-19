@@ -64,4 +64,59 @@ describe('Person Detector - Role Words, Salutations, and False Positive Resistan
       });
     }
   });
+
+  describe('Cue Phrases, Stoplists, and Place False Positive Resistance', () => {
+    it('detects exactly one person with value "shruti" in "I am shruti and i am in india"', () => {
+      const results = detectPerson('I am shruti and i am in india');
+      expect(results).toHaveLength(1);
+      expect(results[0].value).toBe('shruti');
+      expect(results[0].type).toBe('person');
+    });
+
+    it('gives no person for "I am in India", "I am from Delhi", "I am happy today", "I am going to Noida", "I live in Pune"', () => {
+      const falsePositiveCases = [
+        'I am in India',
+        'I am from Delhi',
+        'I am happy today',
+        'I am going to Noida',
+        'I live in Pune',
+      ];
+      for (const phrase of falsePositiveCases) {
+        const results = detectPerson(phrase);
+        expect(results).toEqual([]);
+      }
+    });
+
+    it('gives "Shruti Yadav" for "My name is Shruti Yadav"', () => {
+      const results = detectPerson('My name is Shruti Yadav');
+      expect(results).toHaveLength(1);
+      expect(results[0].value).toBe('Shruti Yadav');
+      expect(results[0].type).toBe('person');
+    });
+
+    it('gives "Rahul" for "I am Rahul"', () => {
+      const results = detectPerson('I am Rahul');
+      expect(results).toHaveLength(1);
+      expect(results[0].value).toBe('Rahul');
+      expect(results[0].type).toBe('person');
+    });
+
+    it('gives Rahul and Priya but not India for "Rahul and Priya went to India"', () => {
+      const results = detectPerson('Rahul and Priya went to India');
+      const values = results.map((r) => r.value);
+      expect(values).toContain('Rahul');
+      expect(values).toContain('Priya');
+      expect(values).not.toContain('India');
+      expect(results).toHaveLength(2);
+    });
+
+    it('gives "Sunita Nair" for "Dear Sunita Nair, welcome"', () => {
+      const results = detectPerson('Dear Sunita Nair, welcome');
+      const values = results.map((r) => r.value);
+      expect(values).toContain('Sunita Nair');
+      expect(values).not.toContain('welcome');
+      const match = results.find((r) => r.value === 'Sunita Nair');
+      expect(match).toBeDefined();
+    });
+  });
 });

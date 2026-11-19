@@ -56,8 +56,8 @@ export default function Home() {
           aria-labelledby="hero-heading"
           className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center"
         >
-          {/* Left Column: Headline, subtext, primary/secondary buttons */}
-          <div className="lg:col-span-6 space-y-6 text-left">
+          {/* Left Column: Headline and subtext */}
+          <div className="lg:col-span-6 space-y-5 text-left">
             <h1
               id="hero-heading"
               className="text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-[var(--text)] leading-tight"
@@ -68,15 +68,6 @@ export default function Home() {
             <p className="text-base sm:text-lg text-[var(--text-dim)] leading-relaxed max-w-xl">
               YapShield checks every prompt before it reaches the AI, replaces personal data and secrets with tokens, and puts the real values back in the answer.
             </p>
-
-            <div className="flex flex-wrap items-center gap-3 pt-2">
-              <Link href="/playground" className="btn-primary">
-                Try the Playground
-              </Link>
-              <Link href="/dashboard" className="btn-secondary">
-                View the dashboard
-              </Link>
-            </div>
           </div>
 
           {/* Right Column: Packet Inspection Gate Simulation */}
@@ -182,9 +173,9 @@ export default function Home() {
             Detection is rule-based and was evaluated on a synthetic dataset, so results on real prompts may differ.{' '}
             <Link
               href="/playground"
-              className="text-[var(--accent)] underline underline-offset-4 hover:text-[var(--text)] transition-colors font-medium"
+              className="text-[var(--accent)] hover:underline transition-colors font-medium"
             >
-              Try the Playground
+              Open the Playground →
             </Link>
           </p>
         </section>

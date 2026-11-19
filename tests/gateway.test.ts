@@ -630,7 +630,7 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       if (res.status === 'ok') {
         expect(res.answer).toBe('Response from fallback model');
       }
-      expect(primaryCalls).toBe(3); // 1 initial + 2 retries (GEMINI_MAX_RETRIES default: 2)
+      expect(primaryCalls).toBe(1); // Switched to fallback model immediately after the first 503
       expect(fallbackCalls).toBe(1); // 1 fallback attempt
     } finally {
       if (prevKey) process.env.GEMINI_API_KEY = prevKey;
@@ -739,5 +739,221 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
     // Verify in-memory store has zero remaining entries
     const storeMap = (vaultStore as any).store as Map<string, any>;
     expect(storeMap.size).toBe(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Latency Reduction & Instrumentation Tests
+  // ---------------------------------------------------------------------------
+  describe('Latency Instrumentation & Optimizations', () => {
+    it('returns a timings object containing numbers only and no prompt text', async () => {
+      const secretPrompt = 'Contact sensitive user Priya with phone 9876543210.';
+      const fakeLlm = async (p: string) => `Answer for ${p}`;
+
+      const res = await runGateway(
+        {
+          prompt: secretPrompt,
+          mode: 'send',
+          policyName: 'Developer',
+        },
+        {
+          llm: fakeLlm,
+          vaultStore,
+          auditStore,
+        }
+      );
+
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        expect(res.timings).toBeDefined();
+        const timings = res.timings!;
+
+        // Check required stage timings are present
+        expect(typeof timings.validate).toBe('number');
+        expect(typeof timings.detect).toBe('number');
+        expect(typeof timings.policy).toBe('number');
+        expect(typeof timings.vaultSave).toBe('number');
+        expect(typeof timings.llm).toBe('number');
+        expect(typeof timings.restore).toBe('number');
+        expect(typeof timings.vaultRemove).toBe('number');
+        expect(typeof timings.auditWrites).toBe('number');
+        expect(typeof timings.total).toBe('number');
+
+        // Every value in timings must strictly be a number
+        for (const [key, val] of Object.entries(timings)) {
+          expect(typeof val).toBe('number');
+          expect(Number.isNaN(val)).toBe(false);
+          expect(val).toBeGreaterThanOrEqual(0);
+        }
+
+        // Timings object must NEVER contain prompt text
+        const serialized = JSON.stringify(timings);
+        expect(serialized).not.toContain('Priya');
+        expect(serialized).not.toContain('9876543210');
+        expect(serialized).not.toContain(secretPrompt);
+      }
+    });
+
+    it('executes the parallel path for override audit write and vault save concurrently', async () => {
+      const prompt = 'Reach Rahul on phone 9876543210 immediately.';
+      let overrideAuditStarted = 0;
+      let overrideAuditEnded = 0;
+      let vaultSaveStarted = 0;
+      let vaultSaveEnded = 0;
+
+      vi.spyOn(auditStore, 'append').mockImplementation(async (entry: any) => {
+        if (entry.action === 'override') {
+          overrideAuditStarted = performance.now();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          overrideAuditEnded = performance.now();
+        }
+        return InMemoryAuditStore.prototype.append.call(auditStore, entry);
+      });
+
+      vi.spyOn(vaultStore, 'save').mockImplementation(async (entries: any) => {
+        vaultSaveStarted = performance.now();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        vaultSaveEnded = performance.now();
+        return InMemoryVaultStore.prototype.save.call(vaultStore, entries);
+      });
+
+      const fakeLlm = async (p: string) => `Processed: ${p}`;
+
+      const phoneIdx = prompt.indexOf('9876543210');
+      const res = await runGateway(
+        {
+          prompt,
+          mode: 'send',
+          policyName: 'Student',
+          overrides: [
+            {
+              type: 'phone',
+              start: phoneIdx,
+              end: phoneIdx + 10,
+              action: 'tokenize',
+              reason: 'Business necessity',
+            },
+          ],
+        },
+        {
+          llm: fakeLlm,
+          vaultStore,
+          auditStore,
+        }
+      );
+
+      expect(res.status).toBe('ok');
+      expect(overrideAuditStarted).toBeGreaterThan(0);
+      expect(vaultSaveStarted).toBeGreaterThan(0);
+
+      // Verify that vaultSave started before overrideAudit finished (concurrency)
+      expect(vaultSaveStarted).toBeLessThan(overrideAuditEnded + 5);
+      expect(overrideAuditStarted).toBeLessThan(vaultSaveEnded + 5);
+    });
+
+    it('switches to fallback model after the first 503 error without multiple retries', async () => {
+      let primaryCount = 0;
+      let fallbackCount = 0;
+
+      const mockPrimary = {
+        generateContent: vi.fn(async () => {
+          primaryCount++;
+          const err: any = new Error('503 Service Unavailable');
+          err.status = 503;
+          throw err;
+        }),
+      };
+
+      const mockFallback = {
+        generateContent: vi.fn(async () => {
+          fallbackCount++;
+          return {
+            response: Promise.resolve({
+              text: () => 'Response from fast fallback',
+            }),
+          };
+        }),
+      };
+
+      const mockClient = {
+        getGenerativeModel: vi.fn((params: { model: string }) => {
+          if (params.model === 'fast-fallback-model') return mockFallback;
+          return mockPrimary;
+        }),
+      };
+
+      const prevKey = process.env.GEMINI_API_KEY;
+      const prevFallback = process.env.GEMINI_FALLBACK_MODEL;
+      process.env.GEMINI_API_KEY = 'test-key';
+      process.env.GEMINI_FALLBACK_MODEL = 'fast-fallback-model';
+
+      try {
+        const llm = makeGeminiLlm({
+          client: mockClient as any,
+          retryDelays: [10, 20],
+        });
+
+        const res = await runGateway(
+          { prompt: 'Testing fast fallback', mode: 'send' },
+          { llm, vaultStore, auditStore }
+        );
+
+        expect(res.status).toBe('ok');
+        if (res.status === 'ok') {
+          expect(res.answer).toBe('Response from fast fallback');
+          expect(res.model).toBe('fast-fallback-model');
+        }
+        // Primary was called exactly once on first 503 before switching
+        expect(primaryCount).toBe(1);
+        expect(fallbackCount).toBe(1);
+      } finally {
+        if (prevKey) process.env.GEMINI_API_KEY = prevKey;
+        else delete process.env.GEMINI_API_KEY;
+
+        if (prevFallback) process.env.GEMINI_FALLBACK_MODEL = prevFallback;
+        else delete process.env.GEMINI_FALLBACK_MODEL;
+      }
+    });
+
+    it('skips vault writes and vault entries completely for a clean prompt', async () => {
+      const cleanPrompt = 'How does photosynthesis convert light energy into chemical energy?';
+      const saveSpy = vi.spyOn(vaultStore, 'save');
+      const loadSpy = vi.spyOn(vaultStore, 'load');
+      const removeSpy = vi.spyOn(vaultStore, 'remove');
+
+      let llmReceived = '';
+      const fakeLlm = async (p: string) => {
+        llmReceived = p;
+        return 'Photosynthesis takes place in chloroplasts.';
+      };
+
+      const res = await runGateway(
+        {
+          prompt: cleanPrompt,
+          mode: 'send',
+          policyName: 'Developer',
+        },
+        {
+          llm: fakeLlm,
+          vaultStore,
+          auditStore,
+        }
+      );
+
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        expect(res.sanitizedPrompt).toBe(cleanPrompt);
+        expect(res.tokenMap).toHaveLength(0);
+        expect(res.timings?.vaultSave).toBe(0);
+      }
+
+      // Vault must not have been touched at all
+      expect(saveSpy).not.toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+
+      // Ensure store map has zero entries
+      const storeMap = (vaultStore as any).store as Map<string, any>;
+      expect(storeMap.size).toBe(0);
+    });
   });
 });

@@ -19,10 +19,30 @@ export interface GatewayInput {
   userId?: string | null;
 }
 
+export interface GatewayTimings {
+  validate: number;
+  detect: number;
+  policy: number;
+  vaultSave: number;
+  vault_save: number;
+  llm: number;
+  restore: number;
+  vaultRemove: number;
+  vault_remove: number;
+  auditWrites: number;
+  audit_writes: number;
+  total: number;
+  attempts: number;
+  [key: string]: number;
+}
+
 export interface GatewayDeps {
-  llm: (sanitizedPrompt: string) => Promise<string>;
+  llm: (
+    sanitizedPrompt: string
+  ) => Promise<string | { text: string; model?: string; attempts?: number }>;
   vaultStore: VaultStore;
   auditStore: AuditStore;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 export interface GatewayFinding {
@@ -43,6 +63,7 @@ export type GatewayResult =
       findings: GatewayFinding[];
       sanitizedPreview: string;
       prompt?: string;
+      timings?: GatewayTimings;
     }
   | {
       status: 'ok';
@@ -50,17 +71,23 @@ export type GatewayResult =
       risk: RiskScore;
       sanitizedPrompt: string;
       tokenMap: { token: string; type: string }[];
+      timings?: GatewayTimings;
+      model?: string;
+      attempts?: number;
     }
   | {
       status: 'blocked';
       reasons: string[];
       risk: RiskScore;
+      timings?: GatewayTimings;
     }
   | {
       status: 'bad_input';
       message: string;
+      timings?: GatewayTimings;
     }
   | {
       status: 'error';
       message: string;
+      timings?: GatewayTimings;
     };
