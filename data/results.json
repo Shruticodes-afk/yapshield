@@ -1,7 +1,7 @@
 {
-  "evaluatedAt": "2026-11-19T14:17:48.011Z",
+  "evaluatedAt": "2026-11-20T17:13:01.918Z",
   "v1": {
-    "evaluatedAt": "2026-11-19T14:17:47.971Z",
+    "evaluatedAt": "2026-11-20T17:13:01.902Z",
     "dataset": "v1 (original)",
     "filePath": "data\\test_prompts.csv",
     "totalSamples": 300,
@@ -16,8 +16,8 @@
       "cleanTotal": 100,
       "injectionRecall": 1,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.16587899999999858,
-      "latencyP95Ms": 0.19200000000000728,
+      "latencyAvgMs": 0.07588333333333423,
+      "latencyP95Ms": 0.08030000000002246,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -140,8 +140,8 @@
       "cleanTotal": 100,
       "injectionRecall": 0.025,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.00584866666666547,
-      "latencyP95Ms": 0.006099999999946704,
+      "latencyAvgMs": 0.003010333333334832,
+      "latencyP95Ms": 0.0027999999999792635,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -259,7 +259,7 @@
     }
   },
   "v2": {
-    "evaluatedAt": "2026-11-19T14:17:48.009Z",
+    "evaluatedAt": "2026-11-20T17:13:01.917Z",
     "dataset": "v2 (held-out)",
     "filePath": "data\\test_prompts_holdout.csv",
     "totalSamples": 300,
@@ -274,8 +274,8 @@
       "cleanTotal": 100,
       "injectionRecall": 1,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.08656800000000127,
-      "latencyP95Ms": 0.1652000000000271,
+      "latencyAvgMs": 0.032085000000001855,
+      "latencyP95Ms": 0.04860000000002174,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -398,8 +398,8 @@
       "cleanTotal": 100,
       "injectionRecall": 0.025,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.0025076666666692896,
-      "latencyP95Ms": 0.00430000000005748,
+      "latencyAvgMs": 0.0013533333333312688,
+      "latencyP95Ms": 0.002100000000041291,
       "perTypeMetrics": [
         {
           "type": "email",
