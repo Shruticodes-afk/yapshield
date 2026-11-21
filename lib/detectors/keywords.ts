@@ -1,15 +1,8 @@
 import { Detection } from './types';
-import { findAll } from './utils';
 
 /**
- * Escapes special regular expression characters in a string.
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Detects case-insensitive whole-word occurrences of custom confidential keywords in text.
+ * Detects case-insensitive whole-word occurrences of custom confidential keywords in text
+ * without constructing regular expressions from user input.
  *
  * @param text - The raw text to inspect
  * @param keywords - Array of confidential words to search for
@@ -21,6 +14,9 @@ export function detectKeywords(text: string, keywords: string[]): Detection[] {
   }
 
   const allDetections: Detection[] = [];
+  const textLower = text.toLowerCase();
+
+  const isWordChar = (ch: string) => /[A-Za-z0-9_]/.test(ch);
 
   for (const keyword of keywords) {
     const trimmed = keyword.trim();
@@ -28,11 +24,38 @@ export function detectKeywords(text: string, keywords: string[]): Detection[] {
       continue;
     }
 
-    const pattern = `\\b${escapeRegex(trimmed)}\\b`;
-    const regex = new RegExp(pattern, 'gi');
+    const keywordLower = trimmed.toLowerCase();
+    const len = keywordLower.length;
+    let startPos = 0;
 
-    const matches = findAll(text, regex, 'keyword', 1.0);
-    allDetections.push(...matches);
+    while (startPos <= textLower.length - len) {
+      const matchIndex = textLower.indexOf(keywordLower, startPos);
+      if (matchIndex === -1) {
+        break;
+      }
+
+      const endIndex = matchIndex + len;
+
+      // Word boundary checks:
+      // Before matchIndex must not be a word character
+      const hasWordBoundaryBefore =
+        matchIndex === 0 || !isWordChar(text[matchIndex - 1]);
+      // After endIndex must not be a word character
+      const hasWordBoundaryAfter =
+        endIndex >= text.length || !isWordChar(text[endIndex]);
+
+      if (hasWordBoundaryBefore && hasWordBoundaryAfter) {
+        allDetections.push({
+          type: 'keyword',
+          value: text.slice(matchIndex, endIndex),
+          start: matchIndex,
+          end: endIndex,
+          confidence: 1.0,
+        });
+      }
+
+      startPos = matchIndex + 1;
+    }
   }
 
   // Deduplicate overlapping or identical keyword matches

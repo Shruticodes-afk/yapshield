@@ -1,7 +1,7 @@
 {
-  "evaluatedAt": "2026-11-20T17:13:01.918Z",
+  "evaluatedAt": "2026-11-20T17:42:24.595Z",
   "v1": {
-    "evaluatedAt": "2026-11-20T17:13:01.902Z",
+    "evaluatedAt": "2026-11-20T17:42:24.571Z",
     "dataset": "v1 (original)",
     "filePath": "data\\test_prompts.csv",
     "totalSamples": 300,
@@ -16,8 +16,8 @@
       "cleanTotal": 100,
       "injectionRecall": 1,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.07588333333333423,
-      "latencyP95Ms": 0.08030000000002246,
+      "latencyAvgMs": 0.13841866666666702,
+      "latencyP95Ms": 0.14770000000004302,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -140,8 +140,8 @@
       "cleanTotal": 100,
       "injectionRecall": 0.025,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.003010333333334832,
-      "latencyP95Ms": 0.0027999999999792635,
+      "latencyAvgMs": 0.0031643333333325548,
+      "latencyP95Ms": 0.0026000000000294676,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -259,23 +259,23 @@
     }
   },
   "v2": {
-    "evaluatedAt": "2026-11-20T17:13:01.917Z",
+    "evaluatedAt": "2026-11-20T17:42:24.593Z",
     "dataset": "v2 (held-out)",
     "filePath": "data\\test_prompts_holdout.csv",
     "totalSamples": 300,
     "yapShield": {
       "micro": {
         "precision": 1,
-        "recall": 0.9949748743718593,
-        "f1": 0.9974811083123425
+        "recall": 1,
+        "f1": 1
       },
       "cleanFpr": 0,
       "cleanFpCount": 0,
       "cleanTotal": 100,
       "injectionRecall": 1,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.032085000000001855,
-      "latencyP95Ms": 0.04860000000002174,
+      "latencyAvgMs": 0.059194333333332454,
+      "latencyP95Ms": 0.07679999999999154,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -378,12 +378,12 @@
         },
         {
           "type": "person",
-          "tp": 21,
+          "tp": 22,
           "fp": 0,
-          "fn": 1,
+          "fn": 0,
           "precision": 1,
-          "recall": 0.9545454545454546,
-          "f1": 0.9767441860465117
+          "recall": 1,
+          "f1": 1
         }
       ]
     },
@@ -398,8 +398,8 @@
       "cleanTotal": 100,
       "injectionRecall": 0.025,
       "injectionFpr": 0,
-      "latencyAvgMs": 0.0013533333333312688,
-      "latencyP95Ms": 0.002100000000041291,
+      "latencyAvgMs": 0.0013789999999992612,
+      "latencyP95Ms": 0.002299999999991087,
       "perTypeMetrics": [
         {
           "type": "email",
@@ -512,22 +512,7 @@
       ]
     },
     "diagnostics": {
-      "topMissesById": [
-        {
-          "id": 281,
-          "group": "mixed",
-          "expected": [
-            "person",
-            "email",
-            "phone"
-          ],
-          "detected": [
-            "email",
-            "phone"
-          ],
-          "injectionScore": 0
-        }
-      ],
+      "topMissesById": [],
       "topFalsePositivesById": []
     }
   }

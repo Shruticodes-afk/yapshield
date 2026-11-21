@@ -54,8 +54,8 @@ export const TYPE_PRIORITY: Record<DetectionType, number> = {
   phone: 9,
   email: 10,
   high_entropy_secret: 11,
-  person: 12,
-  keyword: 13,
+  keyword: 12,
+  person: 13,
 };
 
 export interface DetectAllOptions {

@@ -1,5 +1,9 @@
 import { Detector, Detection } from './types';
-import { INDIAN_FIRST_NAMES } from './data/indian-names';
+import {
+  INDIAN_FIRST_NAMES,
+  INDIAN_SURNAMES,
+  UNAMBIGUOUS_INDIAN_NAMES,
+} from './data/indian-names';
 
 // Major countries, Indian states and Union Territories, and major Indian cities/NCR
 const PLACE_STOPLIST = new Set([
@@ -212,12 +216,33 @@ const STOP_WORDS = new Set([
   'unless',
   'than',
   'i',
+  'im',
+  "i'm",
+  'm',
   'me',
   'my',
   'myself',
   'you',
   'your',
   'yours',
+  'hai',
+  'hain',
+  'hoon',
+  'hu',
+  'ho',
+  'ka',
+  'ki',
+  'ke',
+  'ko',
+  'se',
+  'bulao',
+  'kaho',
+  'naam',
+  'mera',
+  'meri',
+  'main',
+  'mai',
+  'mujhe',
   'yourself',
   'he',
   'him',
@@ -355,6 +380,13 @@ const STOP_WORDS = new Set([
   'hey',
 ]);
 
+// Set of lowercase Indian surnames for surname detection
+const INDIAN_SURNAMES_SET = new Set(
+  INDIAN_SURNAMES
+    .map((name) => name.toLowerCase())
+    .filter((name) => !PLACE_STOPLIST.has(name) && !STOP_WORDS.has(name))
+);
+
 // Common non-name words to exclude from generic phrase captures
 const EXCLUDED_WORDS = new Set([
   'a',
@@ -449,7 +481,8 @@ function isPlace(str: string): boolean {
  */
 function extractCueName(
   text: string,
-  startIndex: number
+  startIndex: number,
+  options?: { requireCapitalized?: boolean }
 ): { value: string; start: number; end: number } | null {
   let curIndex = startIndex;
   const words: { word: string; start: number; end: number }[] = [];
@@ -484,6 +517,10 @@ function extractCueName(
     // Name candidate condition: starts with uppercase OR exact match in Indian names list
     const isCapitalized = /^[A-Z][a-z]*$/.test(rawWord);
     const isInNamesList = INDIAN_NAMES_SET.has(lower);
+
+    if (options?.requireCapitalized && !isCapitalized) {
+      break;
+    }
 
     if (!isCapitalized && !isInNamesList) {
       break;
@@ -524,9 +561,30 @@ export function isStartOfSentence(text: string, index: number): boolean {
 }
 
 /**
- * Rule (a): Cue phrases like 'my name is', 'I am', 'this is', 'name:'
+ * Rule (a): Cue phrases like 'my name is', 'I am', 'this is', 'name:',
+ * 'i m', 'im', 'i\'m', 'myself', 'call me', 'name is',
+ * 'hi', 'hello', 'hey', 'dear' followed by a name candidate,
+ * Hinglish: 'mera naam X hai', 'mera naam hai X', 'main X hoon', 'mai X hu', 'mujhe X bulao'
  */
-const CUE_PHRASE_REGEX = /\b(?:my name is|i am|this is)\s+|\bname\s*:\s*/gi;
+const CUE_PHRASE_REGEX =
+  /\b(?:my name is|name is|this is|i am|i'm|im|i\s+m|myself|call me)\s+|\bname\s*:\s*|\b(?:hi|hello|hey|dear)[,\s]+\s*|\bmera\s+naam(?:\s+hai)?\s+|\b(?:main|mai)\s+|\bmujhe\s+/gi;
+
+/**
+ * 'it\'s' cue (only when followed by a capitalized word)
+ */
+const ITS_CUE_REGEX = /\b(?:it's|its)\s+/gi;
+
+/**
+ * Hinglish suffix patterns: 'X ka phone', 'X ki id'
+ */
+const HINGLISH_SUFFIX_REGEX =
+  /\b([A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(?:ka\s+phone|ki\s+id)\b/gi;
+
+/**
+ * '<name candidate> from <place>' pattern
+ */
+const NAME_FROM_PLACE_REGEX =
+  /\b([A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+from\s+([a-zA-Z\s]+?)(?=[,\.\?!]|\s+(?:and|or|in|at|to|with)\b|$)/gi;
 
 /**
  * Rule (b): Role words and salutation patterns like:
@@ -544,7 +602,15 @@ const ROLE_PATTERN_REGEX =
 const TITLE_REGEX = /\b(Mr|Mrs|Ms|Dr|Prof|Shri|Smt)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g;
 
 /**
- * Rule (d): List of common Indian first names, optionally followed by a capitalized surname.
+ * Rule (d): Unambiguous Indian names list matches (confidence 0.6) - detected without cue phrase in any letter case
+ */
+const UNAMBIGUOUS_NAMES_REGEX = new RegExp(
+  `\\b(${Array.from(UNAMBIGUOUS_INDIAN_NAMES).join('|')})(?:\\s+([A-Za-z]+))?\\b`,
+  'gi'
+);
+
+/**
+ * Rule (e): List of common Indian first names, optionally followed by a capitalized surname (confidence 0.6).
  */
 const INDIAN_NAME_REGEX = new RegExp(
   `\\b(${INDIAN_FIRST_NAMES.filter((n) => n.toLowerCase() !== 'india' && !PLACE_STOPLIST.has(n.toLowerCase())).join('|')})(?:\\s+([A-Z][a-z]+))?\\b`,
@@ -563,9 +629,26 @@ export const detectPerson: Detector = (text: string): Detection[] => {
   const cueRegex = new RegExp(CUE_PHRASE_REGEX.source, CUE_PHRASE_REGEX.flags);
   let cueMatch: RegExpExecArray | null;
   while ((cueMatch = cueRegex.exec(text)) !== null) {
+    const cueStr = cueMatch[0].trim().toLowerCase();
     const afterCueIndex = cueMatch.index + cueMatch[0].length;
     const captured = extractCueName(text, afterCueIndex);
     if (captured) {
+      // Check Hinglish constraints:
+      // If cue was 'main' or 'mai', require followed by hoon/hu
+      if (/^(?:main|mai)$/.test(cueStr)) {
+        const rest = text.slice(captured.end);
+        if (!/^\s+(?:hoon|hu)\b/i.test(rest)) {
+          continue;
+        }
+      }
+      // If cue was 'mujhe', require followed by bulao/kaho
+      if (/^mujhe$/.test(cueStr)) {
+        const rest = text.slice(captured.end);
+        if (!/^\s+(?:bulao|kaho)\b/i.test(rest)) {
+          continue;
+        }
+      }
+
       candidates.push({
         type: 'person',
         value: captured.value,
@@ -574,6 +657,101 @@ export const detectPerson: Detector = (text: string): Detection[] => {
         confidence: 0.85,
       });
       cueRegex.lastIndex = Math.max(cueRegex.lastIndex, captured.end);
+    }
+  }
+
+  // It's cue (only when followed by a capitalized word)
+  const itsRegex = new RegExp(ITS_CUE_REGEX.source, ITS_CUE_REGEX.flags);
+  let itsMatch: RegExpExecArray | null;
+  while ((itsMatch = itsRegex.exec(text)) !== null) {
+    const afterCueIndex = itsMatch.index + itsMatch[0].length;
+    const captured = extractCueName(text, afterCueIndex, { requireCapitalized: true });
+    if (captured) {
+      candidates.push({
+        type: 'person',
+        value: captured.value,
+        start: captured.start,
+        end: captured.end,
+        confidence: 0.85,
+      });
+      itsRegex.lastIndex = Math.max(itsRegex.lastIndex, captured.end);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Hinglish suffix patterns: 'X ka phone', 'X ki id' (confidence 0.85)
+  // ------------------------------------------------------------------
+  const hsRegex = new RegExp(HINGLISH_SUFFIX_REGEX.source, HINGLISH_SUFFIX_REGEX.flags);
+  let hsMatch: RegExpExecArray | null;
+  while ((hsMatch = hsRegex.exec(text)) !== null) {
+    const rawName = hsMatch[1];
+    const words = rawName.trim().split(/\s+/);
+    const validWords: string[] = [];
+    for (const w of words) {
+      const low = w.toLowerCase();
+      if (STOP_WORDS.has(low) || PLACE_STOPLIST.has(low) || NON_NAME_WORDS.has(low) || EXCLUDED_WORDS.has(low)) {
+        break;
+      }
+      if (!/^[A-Z][a-z]*$/.test(w) && !INDIAN_NAMES_SET.has(low)) {
+        break;
+      }
+      validWords.push(w);
+    }
+    if (validWords.length > 0 && validWords.length <= 3) {
+      const val = validWords.join(' ');
+      if (!isPlace(val)) {
+        const start = hsMatch.index;
+        const end = start + val.length;
+        candidates.push({
+          type: 'person',
+          value: val,
+          start,
+          end,
+          confidence: 0.85,
+        });
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // '<name candidate> from <place>' pattern (confidence 0.85)
+  // ------------------------------------------------------------------
+  const nfpRegex = new RegExp(NAME_FROM_PLACE_REGEX.source, NAME_FROM_PLACE_REGEX.flags);
+  let nfpMatch: RegExpExecArray | null;
+  while ((nfpMatch = nfpRegex.exec(text)) !== null) {
+    const rawCandidate = nfpMatch[1];
+    const rawPlace = nfpMatch[2].trim().toLowerCase();
+
+    if (!isPlace(rawPlace) && !PLACE_STOPLIST.has(rawPlace)) {
+      continue;
+    }
+
+    const words = rawCandidate.trim().split(/\s+/);
+    const validWords: string[] = [];
+    for (const w of words) {
+      const low = w.toLowerCase();
+      if (STOP_WORDS.has(low) || PLACE_STOPLIST.has(low) || NON_NAME_WORDS.has(low) || EXCLUDED_WORDS.has(low)) {
+        break;
+      }
+      if (!/^[A-Z][a-z]*$/.test(w) && !INDIAN_NAMES_SET.has(low)) {
+        break;
+      }
+      validWords.push(w);
+    }
+
+    if (validWords.length > 0 && validWords.length <= 3) {
+      const val = validWords.join(' ');
+      if (!isPlace(val)) {
+        const start = nfpMatch.index + nfpMatch[0].indexOf(rawCandidate);
+        const end = start + val.length;
+        candidates.push({
+          type: 'person',
+          value: val,
+          start,
+          end,
+          confidence: 0.85,
+        });
+      }
     }
   }
 
@@ -665,7 +843,52 @@ export const detectPerson: Detector = (text: string): Detection[] => {
   }
 
   // ------------------------------------------------------------------
-  // Rule (d): Indian first name list matches (confidence 0.6)
+  // Rule (d): Unambiguous Indian names list matches (confidence 0.6)
+  // Detected WITHOUT any cue phrase in any letter case as whole word
+  // ------------------------------------------------------------------
+  const unambigRegex = new RegExp(UNAMBIGUOUS_NAMES_REGEX.source, UNAMBIGUOUS_NAMES_REGEX.flags);
+  let uMatch: RegExpExecArray | null;
+  while ((uMatch = unambigRegex.exec(text)) !== null) {
+    const firstName = uMatch[1];
+    const secondWord = uMatch[2];
+    const start = uMatch.index;
+
+    if (isPlace(firstName)) {
+      continue;
+    }
+
+    let value = firstName;
+    let end = start + firstName.length;
+
+    if (secondWord) {
+      const lowerSecond = secondWord.toLowerCase();
+      if (
+        (INDIAN_SURNAMES_SET.has(lowerSecond) || /^[A-Z][a-z]+$/.test(secondWord)) &&
+        !STOP_WORDS.has(lowerSecond) &&
+        !PLACE_STOPLIST.has(lowerSecond) &&
+        !NON_NAME_WORDS.has(lowerSecond) &&
+        !EXCLUDED_WORDS.has(lowerSecond)
+      ) {
+        value = `${firstName} ${secondWord}`;
+        end = start + uMatch[0].length;
+      }
+    }
+
+    if (isPlace(value) || PLACE_STOPLIST.has(value.toLowerCase())) {
+      continue;
+    }
+
+    candidates.push({
+      type: 'person',
+      value,
+      start,
+      end,
+      confidence: 0.6,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Rule (e): Indian first name list matches (confidence 0.6)
   // ------------------------------------------------------------------
   const nameRegex = new RegExp(INDIAN_NAME_REGEX.source, INDIAN_NAME_REGEX.flags);
   let nameMatch: RegExpExecArray | null;
@@ -717,7 +940,7 @@ export const detectPerson: Detector = (text: string): Detection[] => {
 
   // ------------------------------------------------------------------
   // Deduplicate and resolve overlapping person detections:
-  // Higher confidence (0.85 > 0.6) wins; tie-breaker: longer match.
+  // Higher confidence (0.85 > 0.7 > 0.6) wins; tie-breaker: longer match.
   // ------------------------------------------------------------------
   candidates.sort((a, b) => {
     if (b.confidence !== a.confidence) {

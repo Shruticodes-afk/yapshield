@@ -121,6 +121,49 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Strict validation for optional protectedWords: max 10 strings, 2-40 chars, no control chars
+    let validatedProtectedWords: string[] | undefined = undefined;
+    if (body.protectedWords !== undefined && body.protectedWords !== null) {
+      if (!Array.isArray(body.protectedWords) || body.protectedWords.length > 10) {
+        return NextResponse.json(
+          {
+            status: 'bad_input',
+            message: 'protectedWords must be an array of at most 10 items.',
+          },
+          { status: 400, headers: { 'Cache-Control': 'no-store' } }
+        );
+      }
+      const words: string[] = [];
+      for (const item of body.protectedWords) {
+        if (typeof item !== 'string') {
+          return NextResponse.json(
+            {
+              status: 'bad_input',
+              message: 'Each item in protectedWords must be a string.',
+            },
+            { status: 400, headers: { 'Cache-Control': 'no-store' } }
+          );
+        }
+        const trimmed = item.trim();
+        if (
+          trimmed.length < 2 ||
+          trimmed.length > 40 ||
+          /[\x00-\x1F\x7F]/.test(trimmed)
+        ) {
+          return NextResponse.json(
+            {
+              status: 'bad_input',
+              message:
+                'Each protected word must be between 2 and 40 characters and cannot contain control characters.',
+            },
+            { status: 400, headers: { 'Cache-Control': 'no-store' } }
+          );
+        }
+        words.push(trimmed);
+      }
+      validatedProtectedWords = words;
+    }
+
     // Extract optional user identity from Authorization Bearer token
     let userId: string | null = null;
     const authHeader =
@@ -169,6 +212,7 @@ export async function POST(request: NextRequest) {
         typeof body.userId === 'string' || body.userId === null
           ? (body.userId as string | null)
           : userId,
+      protectedWords: validatedProtectedWords,
     };
 
     const result = await runGateway(gatewayInput, {

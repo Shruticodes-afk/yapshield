@@ -119,4 +119,49 @@ describe('Person Detector - Role Words, Salutations, and False Positive Resistan
       expect(match).toBeDefined();
     });
   });
+
+  describe('Unambiguous Names and Extended Cue Phrases', () => {
+    it("'hi im in lucknow shruti' gives person 'shruti' only", () => {
+      const results = detectPerson('hi im in lucknow shruti');
+      expect(results).toHaveLength(1);
+      expect(results[0].value).toBe('shruti');
+      expect(results[0].type).toBe('person');
+      expect(results[0].confidence).toBe(0.6);
+    });
+
+    it("'HI IM IN LUCKNOW SHRUTI' gives person 'shruti' only", () => {
+      const results = detectPerson('HI IM IN LUCKNOW SHRUTI');
+      expect(results).toHaveLength(1);
+      expect(results[0].value).toBe('SHRUTI');
+      expect(results[0].type).toBe('person');
+      expect(results[0].confidence).toBe(0.6);
+    });
+
+    it("'shruti' inside 'shrutika' is not matched", () => {
+      const results = detectPerson('shrutika is going to school');
+      expect(results.some((r) => r.value.toLowerCase() === 'shruti')).toBe(false);
+    });
+
+    it("'I am in India' gives nothing", () => {
+      const results = detectPerson('I am in India');
+      expect(results).toHaveLength(0);
+    });
+
+    it("'shruti from lucknow' gives person 'shruti' only and never reports 'lucknow'", () => {
+      const results = detectPerson('shruti from lucknow');
+      expect(results).toHaveLength(1);
+      expect(results[0].value).toBe('shruti');
+      expect(results[0].type).toBe('person');
+    });
+
+    it("detects Hinglish patterns: 'mera naam X hai', 'main X hoon', 'mai X hu', 'mujhe X bulao', 'X ka phone', 'X ki id'", () => {
+      expect(detectPerson('mera naam Shruti hai').map((r) => r.value)).toEqual(['Shruti']);
+      expect(detectPerson('mera naam hai Priya').map((r) => r.value)).toEqual(['Priya']);
+      expect(detectPerson('main Rahul hoon').map((r) => r.value)).toEqual(['Rahul']);
+      expect(detectPerson('mai Aarav hu').map((r) => r.value)).toEqual(['Aarav']);
+      expect(detectPerson('mujhe Vikram bulao').map((r) => r.value)).toEqual(['Vikram']);
+      expect(detectPerson('Neha ka phone').map((r) => r.value)).toEqual(['Neha']);
+      expect(detectPerson('Karan ki id').map((r) => r.value)).toEqual(['Karan']);
+    });
+  });
 });

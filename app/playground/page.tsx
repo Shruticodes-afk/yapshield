@@ -126,6 +126,7 @@ interface PipelineStripProps {
   pipelineCompletedCount: number;
   pipelineActiveIndex: number;
   isBlocked: boolean;
+  isReviewSkipped?: boolean;
 }
 
 const PipelineStrip = React.memo(function PipelineStrip({
@@ -135,6 +136,7 @@ const PipelineStrip = React.memo(function PipelineStrip({
   pipelineCompletedCount,
   pipelineActiveIndex,
   isBlocked,
+  isReviewSkipped,
 }: PipelineStripProps) {
   return (
     <div className="hud-panel p-4 space-y-3">
@@ -170,12 +172,15 @@ const PipelineStrip = React.memo(function PipelineStrip({
             const isCompleted = idx < pipelineCompletedCount;
             const isActive = idx === pipelineActiveIndex;
             const isBlockedStage = isBlocked && idx === 3;
+            const isSkipped = isReviewSkipped && idx === 3;
 
             return (
-              <div key={st.id} className="flex flex-col items-center gap-1">
+              <div key={st.id} className="flex flex-col items-center gap-1 text-center">
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-mono font-bold transition-all select-none ${
-                    isCompleted
+                    isSkipped
+                      ? 'bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text-dim)]'
+                      : isCompleted
                       ? 'bg-[var(--accent)] text-[var(--bg)] shadow-xs'
                       : isBlockedStage
                       ? 'bg-rose-500 text-white'
@@ -184,7 +189,11 @@ const PipelineStrip = React.memo(function PipelineStrip({
                       : 'bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text-dim)]'
                   }`}
                 >
-                  {isCompleted ? (
+                  {isSkipped ? (
+                    <svg className="w-3 h-3 text-[var(--text-dim)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                  ) : isCompleted ? (
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
@@ -194,17 +203,26 @@ const PipelineStrip = React.memo(function PipelineStrip({
                     <span>{idx + 1}</span>
                   )}
                 </div>
-                <span
-                  className={`text-[11px] font-mono tracking-tight select-none ${
-                    isActive || isCompleted
-                      ? 'text-[var(--text)] font-semibold'
-                      : isBlockedStage
-                      ? 'text-rose-500 font-semibold'
-                      : 'text-[var(--text-dim)]'
-                  }`}
-                >
-                  {st.label}
-                </span>
+                <div className="flex flex-col items-center">
+                  <span
+                    className={`text-[11px] font-mono tracking-tight select-none ${
+                      isSkipped
+                        ? 'text-[var(--text-dim)]'
+                        : isActive || isCompleted
+                        ? 'text-[var(--text)] font-semibold'
+                        : isBlockedStage
+                        ? 'text-rose-500 font-semibold'
+                        : 'text-[var(--text-dim)]'
+                    }`}
+                  >
+                    {st.label}
+                  </span>
+                  {isSkipped && (
+                    <span className="text-[9px] font-mono text-[var(--text-dim)] select-none whitespace-nowrap">
+                      No review needed
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -223,6 +241,9 @@ interface InputConsoleProps {
   onScan: () => void;
   isScanning: boolean;
   errorMessage: string | null;
+  protectedWords: string[];
+  onAddProtectedWord: (word: string) => void;
+  onRemoveProtectedWord: (index: number) => void;
 }
 
 const InputConsole = React.memo(function InputConsole({
@@ -234,8 +255,22 @@ const InputConsole = React.memo(function InputConsole({
   onScan,
   isScanning,
   errorMessage,
+  protectedWords,
+  onAddProtectedWord,
+  onRemoveProtectedWord,
 }: InputConsoleProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [wordInput, setWordInput] = useState('');
+
+  const handleAddWord = useCallback(() => {
+    const trimmed = wordInput.trim();
+    if (trimmed && trimmed.length >= 2 && trimmed.length <= 40 && protectedWords.length < 10) {
+      if (!protectedWords.some((w) => w.toLowerCase() === trimmed.toLowerCase())) {
+        onAddProtectedWord(trimmed);
+      }
+      setWordInput('');
+    }
+  }, [wordInput, protectedWords, onAddProtectedWord]);
 
   const adjustTextareaHeight = useCallback(() => {
     const el = textareaRef.current;
@@ -308,6 +343,51 @@ const InputConsole = React.memo(function InputConsole({
                 : 'border-[var(--border)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]'
             }`}
           />
+        </div>
+
+        {/* Protect these words */}
+        <div className="space-y-1.5 flex-shrink-0">
+          <div className="flex items-center justify-between text-xs font-mono">
+            <label htmlFor="protectedWordsInput" className="hud-label select-none">
+              Protect these words (optional)
+            </label>
+            <span className="text-[var(--text-dim)]">{protectedWords.length} / 10</span>
+          </div>
+          <div className="p-2 bg-[var(--bg)] border border-[var(--border)] rounded flex flex-wrap gap-1.5 items-center min-h-[38px] focus-within:ring-1 focus-within:ring-[var(--accent)]">
+            {protectedWords.map((word, idx) => (
+              <span
+                key={idx}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]"
+              >
+                <span>{word}</span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveProtectedWord(idx)}
+                  className="text-[var(--text-dim)] hover:text-red-500 transition-colors ml-0.5 focus:outline-none"
+                  aria-label={`Remove ${word}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {protectedWords.length < 10 && (
+              <input
+                id="protectedWordsInput"
+                type="text"
+                value={wordInput}
+                onChange={(e) => setWordInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    handleAddWord();
+                  }
+                }}
+                onBlur={handleAddWord}
+                placeholder={protectedWords.length === 0 ? 'Type a word and press Enter...' : 'Add word...'}
+                className="bg-transparent text-xs text-[var(--text)] placeholder:text-[var(--text-dim)]/50 focus:outline-none flex-1 min-w-[120px]"
+              />
+            )}
+          </div>
         </div>
 
         {/* Middle: Examples (Fake Data) */}
@@ -403,6 +483,17 @@ export default function PlaygroundPage() {
     'Please contact Dr. Rahul Sharma at rahul.sharma@example.com or call +91 98765 43210 regarding invoice #INV-9021.'
   );
 
+  // Protected words kept strictly in React state memory (never in localStorage or sessionStorage)
+  const [protectedWords, setProtectedWords] = useState<string[]>([]);
+
+  const handleAddProtectedWord = useCallback((word: string) => {
+    setProtectedWords((prev) => (prev.length < 10 ? [...prev, word] : prev));
+  }, []);
+
+  const handleRemoveProtectedWord = useCallback((index: number) => {
+    setProtectedWords((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
   const [isScanning, setIsScanning] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -494,6 +585,7 @@ export default function PlaygroundPage() {
           prompt,
           mode: 'preview',
           policyName,
+          protectedWords: protectedWords.length > 0 ? protectedWords : undefined,
         }),
       });
 
@@ -533,7 +625,7 @@ export default function PlaygroundPage() {
     } finally {
       setIsScanning(false);
     }
-  }, [prompt, policyName]);
+  }, [prompt, policyName, protectedWords]);
 
   // Step 2: Send to AI (mode: 'send')
   const handleSend = async () => {
@@ -594,6 +686,7 @@ export default function PlaygroundPage() {
           mode: 'send',
           policyName,
           overrides: payloadOverrides.length > 0 ? payloadOverrides : undefined,
+          protectedWords: protectedWords.length > 0 ? protectedWords : undefined,
         }),
       });
 
@@ -731,7 +824,8 @@ export default function PlaygroundPage() {
       case 'allow':
         return {
           label: 'Safe to send',
-          description: 'No private data or security violations detected.',
+          description:
+            'No known patterns found. Detection is rule-based and may miss some names; add them under Protect these words.',
           badgeBg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
           textColor: 'text-emerald-600 dark:text-emerald-400',
         };
@@ -770,6 +864,14 @@ export default function PlaygroundPage() {
   const statusLine = scanResult ? getStatusLine(scanResult.decision) : null;
   const topReasons = scanResult?.risk.reasons.slice(0, 3) || [];
 
+  // Review step is skipped when decision is 'allow' or 'sanitize' with no review required (e.g. Developer policy)
+  const isReviewSkipped = Boolean(
+    scanResult &&
+      !isBlocked &&
+      (scanResult.decision.toLowerCase() === 'allow' ||
+        (scanResult.decision.toLowerCase() === 'sanitize' && policyName === 'Developer'))
+  );
+
   // Compute pipeline state driven strictly by real request state
   let pipelineCompletedCount = 0;
   let pipelineActiveIndex = -1;
@@ -792,6 +894,11 @@ export default function PlaygroundPage() {
       pipelineActiveIndex = 3; // Blocked at Review/Send
       pipelineProgress = 50;
       pipelineStatusText = 'Policy block enforced. Edit prompt to remove violations.';
+    } else if (isReviewSkipped) {
+      pipelineCompletedCount = 3;
+      pipelineActiveIndex = 4; // Move active step to Send
+      pipelineProgress = 65;
+      pipelineStatusText = 'Scan complete. No review needed. Ready to send.';
     } else {
       pipelineCompletedCount = 3;
       pipelineActiveIndex = 3; // 'Review'
@@ -826,6 +933,7 @@ export default function PlaygroundPage() {
           pipelineCompletedCount={pipelineCompletedCount}
           pipelineActiveIndex={pipelineActiveIndex}
           isBlocked={isBlocked}
+          isReviewSkipped={isReviewSkipped}
         />
 
         {/* Two-Column Layout on Desktop, Stacked on Mobile */}
@@ -843,6 +951,9 @@ export default function PlaygroundPage() {
               onScan={handleScan}
               isScanning={isScanning}
               errorMessage={errorMessage}
+              protectedWords={protectedWords}
+              onAddProtectedWord={handleAddProtectedWord}
+              onRemoveProtectedWord={handleRemoveProtectedWord}
             />
           </div>
 
@@ -944,8 +1055,8 @@ export default function PlaygroundPage() {
                   </HudPanel>
                 </div>
 
-                {/* Compact findings table with override controls */}
-                {scanResult.findings.length > 0 && (
+                {/* Compact findings table with override controls or empty text */}
+                {scanResult.findings.length > 0 ? (
                   <HudPanel title="Findings" tag="POLICIES" className="space-y-3">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs border-collapse">
@@ -1056,6 +1167,12 @@ export default function PlaygroundPage() {
                         </tbody>
                       </table>
                     </div>
+                  </HudPanel>
+                ) : (
+                  <HudPanel title="Findings" tag="0 FINDINGS" className="space-y-3">
+                    <p className="text-xs text-[var(--text-dim)] py-2 select-text">
+                      No known patterns found. Detection is rule-based and may miss some names; add them under Protect these words.
+                    </p>
                   </HudPanel>
                 )}
 

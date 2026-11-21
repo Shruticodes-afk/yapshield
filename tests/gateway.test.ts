@@ -956,4 +956,60 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       expect(storeMap.size).toBe(0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Protected Words and Playground Invariants
+  // ---------------------------------------------------------------------------
+  describe('Protected Words & Presets', () => {
+    it("protected words ['Shruti'] hides every case variant", async () => {
+      const prompt = 'Please protect shruti, SHRUTI and Shruti in the output.';
+      let llmReceived = '';
+      const fakeLlm = async (p: string) => {
+        llmReceived = p;
+        return `Processed: ${p}`;
+      };
+
+      const res = await runGateway(
+        {
+          prompt,
+          mode: 'send',
+          policyName: 'Student',
+          protectedWords: ['Shruti'],
+        },
+        {
+          llm: fakeLlm,
+          vaultStore,
+          auditStore,
+        }
+      );
+
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        // Raw values should never be sent to LLM
+        expect(llmReceived.toLowerCase()).not.toContain('shruti');
+        expect(llmReceived).toContain('[KEYWORD_1]');
+        expect(llmReceived).toContain('[KEYWORD_2]');
+        expect(llmReceived).toContain('[KEYWORD_3]');
+        // Final restored answer preserves originals
+        expect(res.answer).toContain('shruti');
+        expect(res.answer).toContain('SHRUTI');
+        expect(res.answer).toContain('Shruti');
+      }
+    });
+
+    it('keyword action is tokenize in all three presets (Student, Developer, Enterprise)', async () => {
+      const { PRESETS } = await import('@/lib/policy/presets');
+      expect(PRESETS.Student.rules.keyword).toBe('tokenize');
+      expect(PRESETS.Developer.rules.keyword).toBe('tokenize');
+      expect(PRESETS.Enterprise.rules.keyword).toBe('tokenize');
+    });
+
+    it('empty-result text matches (e)', async () => {
+      const expectedEmptyText =
+        'No known patterns found. Detection is rule-based and may miss some names; add them under Protect these words.';
+      const fs = await import('fs');
+      const playgroundCode = fs.readFileSync('app/playground/page.tsx', 'utf8');
+      expect(playgroundCode).toContain(expectedEmptyText);
+    });
+  });
 });

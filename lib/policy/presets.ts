@@ -4,7 +4,7 @@ import { Policy } from './types';
  * Student Policy Preset:
  * - Balanced mode
  * - Personal contact (email, phone, upi, ifsc) masked
- * - Names tokenized
+ * - Names and custom keywords tokenized
  * - High-risk credentials, IDs, and financial secrets blocked
  * - Injection threshold: 60
  * - Human review required
@@ -25,6 +25,7 @@ export const Student: Policy = {
     high_entropy_secret: 'block',
     upi: 'mask',
     ifsc: 'mask',
+    keyword: 'tokenize',
   },
   injectionThreshold: 60,
   reviewRequired: true,
@@ -34,7 +35,7 @@ export const Student: Policy = {
  * Developer Policy Preset:
  * - Balanced mode
  * - Secrets, credentials, credit cards, and government IDs blocked
- * - Contact info (email, phone) tokenized
+ * - Contact info (email, phone) and custom keywords tokenized
  * - Person names allowed
  * - Injection threshold: 60
  * - Automated processing (reviewRequired: false)
@@ -55,6 +56,7 @@ export const Developer: Policy = {
     credit_card: 'block',
     upi: 'tokenize',
     ifsc: 'allow',
+    keyword: 'tokenize',
   },
   injectionThreshold: 60,
   reviewRequired: false,
@@ -63,7 +65,7 @@ export const Developer: Policy = {
 /**
  * Enterprise Policy Preset:
  * - Strict mode
- * - Maximum security: all sensitive entities blocked except person and email which tokenize
+ * - Maximum security: all sensitive entities blocked except person, email, and keyword which tokenize
  * - Lower injection tolerance (threshold: 40)
  * - Human review required
  */
@@ -83,7 +85,7 @@ export const Enterprise: Policy = {
     upi: 'block',
     ifsc: 'block',
     phone: 'block',
-    keyword: 'block',
+    keyword: 'tokenize',
   },
   injectionThreshold: 40,
   reviewRequired: true,
@@ -97,5 +99,3 @@ export const PRESETS = {
   developer: Developer,
   enterprise: Enterprise,
 } as const;
-
-export default PRESETS;

@@ -2,8 +2,8 @@
 
 **Dataset**: v1 (original)  
 **Total Test Prompts Evaluated**: 300  
-**Average Latency**: 0.08 ms  
-**p95 Latency**: 0.08 ms  
+**Average Latency**: 0.14 ms  
+**p95 Latency**: 0.15 ms  
 
 ## 1. Primary Model Performance (v1 (original))
 
@@ -55,8 +55,8 @@ No false positives recorded.
 
 **Dataset**: v2 (held-out)  
 **Total Test Prompts Evaluated**: 300  
-**Average Latency**: 0.03 ms  
-**p95 Latency**: 0.05 ms  
+**Average Latency**: 0.06 ms  
+**p95 Latency**: 0.08 ms  
 
 ## 1. Primary Model Performance (v2 (held-out))
 
@@ -73,8 +73,8 @@ No false positives recorded.
 | **jwt** | 100.0% | 100.0% | 100.0% | 10 | 0 | 0 |
 | **private_key** | 100.0% | 100.0% | 100.0% | 10 | 0 | 0 |
 | **high_entropy_secret** | 100.0% | 100.0% | 100.0% | 10 | 0 | 0 |
-| **person** | 100.0% | 95.5% | 97.7% | 21 | 0 | 1 |
-| **MICRO AVERAGE** | **100.0%** | **99.5%** | **99.7%** | - | - | - |
+| **person** | 100.0% | 100.0% | 100.0% | 22 | 0 | 0 |
+| **MICRO AVERAGE** | **100.0%** | **100.0%** | **100.0%** | - | - | - |
 
 ### Security & Clean Robustness
 - **Clean Group False-Positive Rate (FPR)**: 0.0% (0/100)
@@ -86,17 +86,15 @@ No false positives recorded.
 | Metric | YapShield Guardrails | Naive Regex Baseline | Delta |
 | :--- | :---: | :---: | :---: |
 | **Entity Micro Precision** | **100.0%** | 83.1% | +16.9% |
-| **Entity Micro Recall** | **99.5%** | 54.3% | +45.2% |
-| **Entity Micro F1** | **99.7%** | 65.7% | +34.1% |
+| **Entity Micro Recall** | **100.0%** | 54.3% | +45.7% |
+| **Entity Micro F1** | **100.0%** | 65.7% | +34.3% |
 | **Clean Group FPR (Lower is Better)** | **0.0%** | 7.0% | -7.0% |
 | **Injection Attack Recall** | **100.0%** | 2.5% | +97.5% |
 | **Injection FPR (Lower is Better)** | **0.0%** | 0.0% | -0.0% |
 
 ## 3. Diagnostics: Top Misses by ID (IDs and Numbers Only)
 
-| ID | Group | Expected Entities | Detected Entities | Injection Score |
-| :---: | :--- | :--- | :--- | :---: |
-| #281 | mixed | person, email, phone | email, phone | 0 |
+No misses recorded.
 
 ## 4. Diagnostics: Top False Positives by ID (IDs and Numbers Only)
 

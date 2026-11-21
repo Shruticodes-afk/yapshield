@@ -17,6 +17,7 @@ export interface GatewayInput {
   policyName?: 'Student' | 'Developer' | 'Enterprise';
   overrides?: GatewayOverride[];
   userId?: string | null;
+  protectedWords?: string[];
 }
 
 export interface GatewayTimings {

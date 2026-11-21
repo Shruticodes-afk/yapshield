@@ -243,7 +243,11 @@ export async function runGateway(
     if (input.mode === 'preview') {
       stage = 'detect';
       const tDetStart = performance.now();
-      const detections = detectAll(input.prompt);
+      const detOptions =
+        input.protectedWords && input.protectedWords.length > 0
+          ? { keywords: input.protectedWords }
+          : undefined;
+      const detections = detectAll(input.prompt, detOptions);
       const injection = detectInjection(input.prompt);
       tDetect += performance.now() - tDetStart;
 
@@ -327,7 +331,11 @@ export async function runGateway(
     // ALWAYS re-run detection on the server (never trust client findings)
     stage = 'detect';
     const tDetStart = performance.now();
-    const detections = detectAll(input.prompt);
+    const detOptions =
+      input.protectedWords && input.protectedWords.length > 0
+        ? { keywords: input.protectedWords }
+        : undefined;
+    const detections = detectAll(input.prompt, detOptions);
     const injection = detectInjection(input.prompt);
     tDetect += performance.now() - tDetStart;
 
