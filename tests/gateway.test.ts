@@ -318,7 +318,11 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
 
     expect(res.status).toBe('error');
     if (res.status === 'error') {
-      expect(res.message).toBe('Request blocked for safety');
+      expect(res.code).toBe('llm_timeout');
+      expect(res.reason).toBe('llm_timeout');
+      expect(res.message).toBe(
+        'The AI service took too long to answer. Your prompt was not sent.'
+      );
     }
 
     // The audit chain must remain completely valid
@@ -415,7 +419,11 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
     );
 
     expect(res.status).toBe('error');
-    expect(res.message).toBe('Request blocked for safety');
+    if (res.status === 'error') {
+      expect(res.code).toBe('internal');
+      expect(res.reason).toBe('internal');
+      expect(res.message).toBe('Something went wrong. Your prompt was not sent.');
+    }
     expect(errorSpy).toHaveBeenCalledWith(
       '[gateway]',
       'llm',
@@ -438,7 +446,13 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       { llm: apiKeyLlm, vaultStore, auditStore }
     );
     expect(resKey.status).toBe('error');
-    expect(resKey.message).toBe('Request blocked for safety');
+    if (resKey.status === 'error') {
+      expect(resKey.code).toBe('llm_config');
+      expect(resKey.reason).toBe('llm_config');
+      expect(resKey.message).toBe(
+        'The AI model is not available. Please tell the administrator.'
+      );
+    }
     expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
 
     // 2. Error containing raw prompt
@@ -451,7 +465,13 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       { llm: promptLlm, vaultStore, auditStore }
     );
     expect(resPrompt.status).toBe('error');
-    expect(resPrompt.message).toBe('Request blocked for safety');
+    if (resPrompt.status === 'error') {
+      expect(resPrompt.code).toBe('internal');
+      expect(resPrompt.reason).toBe('internal');
+      expect(resPrompt.message).toBe(
+        'Something went wrong. Your prompt was not sent.'
+      );
+    }
     expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
 
     // 3. Error containing token placeholder
@@ -469,7 +489,13 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       { llm: async (p) => p, vaultStore: tokenThrowingStore, auditStore }
     );
     expect(resToken.status).toBe('error');
-    expect(resToken.message).toBe('Request blocked for safety');
+    if (resToken.status === 'error') {
+      expect(resToken.code).toBe('storage_error');
+      expect(resToken.reason).toBe('storage_error');
+      expect(resToken.message).toBe(
+        'A storage step failed. Your prompt was not sent.'
+      );
+    }
     expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'vault', 'Error');
 
     // 4. Error containing environment variable name
@@ -482,7 +508,13 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       { llm: envLlm, vaultStore, auditStore }
     );
     expect(resEnv.status).toBe('error');
-    expect(resEnv.message).toBe('Request blocked for safety');
+    if (resEnv.status === 'error') {
+      expect(resEnv.code).toBe('internal');
+      expect(resEnv.reason).toBe('internal');
+      expect(resEnv.message).toBe(
+        'Something went wrong. Your prompt was not sent.'
+      );
+    }
     expect(errorSpy).toHaveBeenCalledWith('[gateway]', 'llm', 'Error');
 
     errorSpy.mockRestore();
@@ -732,7 +764,11 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
     );
 
     expect(res.status).toBe('error');
-    expect(res.message).toBe('Request blocked for safety');
+    if (res.status === 'error') {
+      expect(res.code).toBe('internal');
+      expect(res.reason).toBe('internal');
+      expect(res.message).toBe('Something went wrong. Your prompt was not sent.');
+    }
     // Ensure vaultStore.remove was called during finally cleanup
     expect(removeSpy).toHaveBeenCalled();
 
@@ -1010,6 +1046,236 @@ describe('Security & AI Gateway (/lib/gateway)', () => {
       const fs = await import('fs');
       const playgroundCode = fs.readFileSync('app/playground/page.tsx', 'utf8');
       expect(playgroundCode).toContain(expectedEmptyText);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Error Taxonomy & Hard Time Cap (/lib/gateway)
+  // ---------------------------------------------------------------------------
+  describe('Error Taxonomy & Hard Time Cap (/lib/gateway)', () => {
+    let vaultStore: InMemoryVaultStore;
+    let auditStore: InMemoryAuditStore;
+
+    beforeEach(() => {
+      vaultStore = new InMemoryVaultStore();
+      auditStore = new InMemoryAuditStore();
+    });
+
+    it('returns llm_busy for HTTP 503 or 429 with user-safe message', async () => {
+      const busyLlm503 = async () => {
+        const err = new Error('Service Unavailable [503]');
+        (err as any).status = 503;
+        throw err;
+      };
+
+      const res503 = await runGateway(
+        { prompt: 'Hello AI', mode: 'send' },
+        { llm: busyLlm503, vaultStore, auditStore }
+      );
+
+      expect(res503.status).toBe('error');
+      if (res503.status === 'error') {
+        expect(res503.code).toBe('llm_busy');
+        expect(res503.reason).toBe('llm_busy');
+        expect(res503.message).toBe(
+          'The AI service is busy right now. Your prompt was not sent. Please try again in a minute.'
+        );
+      }
+
+      const busyLlm429 = async () => {
+        const err = new Error('Too Many Requests [429]');
+        (err as any).status = 429;
+        throw err;
+      };
+
+      const res429 = await runGateway(
+        { prompt: 'Hello AI again', mode: 'send' },
+        { llm: busyLlm429, vaultStore, auditStore }
+      );
+
+      expect(res429.status).toBe('error');
+      if (res429.status === 'error') {
+        expect(res429.code).toBe('llm_busy');
+        expect(res429.reason).toBe('llm_busy');
+        expect(res429.message).toBe(
+          'The AI service is busy right now. Your prompt was not sent. Please try again in a minute.'
+        );
+      }
+    });
+
+    it('returns llm_timeout for timeouts with user-safe message', async () => {
+      const timeoutLlm = async () => {
+        const err = new Error('Gateway request timed out');
+        err.name = 'TimeoutError';
+        throw err;
+      };
+
+      const res = await runGateway(
+        { prompt: 'Hello timeout test', mode: 'send' },
+        { llm: timeoutLlm, vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('error');
+      if (res.status === 'error') {
+        expect(res.code).toBe('llm_timeout');
+        expect(res.reason).toBe('llm_timeout');
+        expect(res.message).toBe(
+          'The AI service took too long to answer. Your prompt was not sent.'
+        );
+      }
+    });
+
+    it('returns llm_config for 404, 401, 403 or missing API key', async () => {
+      for (const code of [404, 401, 403]) {
+        const configLlm = async () => {
+          const err = new Error(`Model error status ${code}`);
+          (err as any).status = code;
+          throw err;
+        };
+
+        const res = await runGateway(
+          { prompt: 'Hello config test', mode: 'send' },
+          { llm: configLlm, vaultStore, auditStore }
+        );
+
+        expect(res.status).toBe('error');
+        if (res.status === 'error') {
+          expect(res.code).toBe('llm_config');
+          expect(res.reason).toBe('llm_config');
+          expect(res.message).toBe(
+            'The AI model is not available. Please tell the administrator.'
+          );
+        }
+      }
+    });
+
+    it('returns storage_error for vault or audit failure', async () => {
+      // 1. Vault save failure
+      const brokenVaultStore = new InMemoryVaultStore();
+      brokenVaultStore.save = async () => {
+        throw new Error('Database connection failed');
+      };
+
+      const resVault = await runGateway(
+        { prompt: 'Contact Dr. Rahul Sharma at rahul@example.com', mode: 'send', policyName: 'Developer' },
+        { llm: async (p) => p, vaultStore: brokenVaultStore, auditStore }
+      );
+
+      expect(resVault.status).toBe('error');
+      if (resVault.status === 'error') {
+        expect(resVault.code).toBe('storage_error');
+        expect(resVault.reason).toBe('storage_error');
+        expect(resVault.message).toBe('A storage step failed. Your prompt was not sent.');
+      }
+
+      // 2. Audit failure
+      const brokenAuditStore = new InMemoryAuditStore();
+      brokenAuditStore.append = async () => {
+        throw new Error('Audit table write failed');
+      };
+
+      const resAudit = await runGateway(
+        { prompt: 'Scan this prompt', mode: 'preview' },
+        { llm: async (p) => p, vaultStore, auditStore: brokenAuditStore }
+      );
+
+      expect(resAudit.status).toBe('error');
+      if (resAudit.status === 'error') {
+        expect(resAudit.code).toBe('storage_error');
+        expect(resAudit.reason).toBe('storage_error');
+        expect(resAudit.message).toBe('A storage step failed. Your prompt was not sent.');
+      }
+    });
+
+    it('returns internal for unexpected internal errors', async () => {
+      const genericLlm = async () => {
+        throw new Error('Unexpected NullPointerException in parser');
+      };
+
+      const res = await runGateway(
+        { prompt: 'Hello internal test', mode: 'send' },
+        { llm: genericLlm, vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('error');
+      if (res.status === 'error') {
+        expect(res.code).toBe('internal');
+        expect(res.reason).toBe('internal');
+        expect(res.message).toBe('Something went wrong. Your prompt was not sent.');
+      }
+    });
+
+    it('only real policy blocks return status blocked with reasons', async () => {
+      // Prompt with Aadhaar under Student preset triggers policy block
+      const res = await runGateway(
+        { prompt: 'My Aadhaar is 2345 6789 0124', mode: 'send', policyName: 'Student' },
+        { llm: async () => 'mock answer', vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('blocked');
+      if (res.status === 'blocked') {
+        expect(res.reasons.length).toBeGreaterThan(0);
+        expect(res.risk.score).toBeGreaterThan(0);
+      }
+    });
+
+    it('enforces overall 25-second deadline cap using fake timers returning llm_timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        const hangingLlm = (_prompt: string, options?: { signal?: AbortSignal }) => {
+          return new Promise<string>((resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('Request timed out: overall deadline of 25 seconds exceeded');
+              err.name = 'TimeoutError';
+              reject(err);
+            });
+          });
+        };
+
+        const gatewayPromise = runGateway(
+          { prompt: 'Testing 25s deadline cap', mode: 'send' },
+          { llm: hangingLlm, vaultStore, auditStore }
+        );
+
+        await vi.advanceTimersByTimeAsync(25000);
+
+        const res = await gatewayPromise;
+        expect(res.status).toBe('error');
+        if (res.status === 'error') {
+          expect(res.code).toBe('llm_timeout');
+          expect(res.reason).toBe('llm_timeout');
+          expect(res.message).toBe(
+            'The AI service took too long to answer. Your prompt was not sent.'
+          );
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('never leaks raw error text or prompt text in any error response', async () => {
+      const rawSecretPrompt = 'TopSecretPromptX999';
+      const rawInternalStack =
+        'InternalServerError: Database connection at 10.0.0.1:5432 lost at /var/www/internal.ts:99';
+      const leakingLlm = async () => {
+        throw new Error(rawInternalStack);
+      };
+
+      const res = await runGateway(
+        { prompt: rawSecretPrompt, mode: 'send' },
+        { llm: leakingLlm, vaultStore, auditStore }
+      );
+
+      expect(res.status).toBe('error');
+      if (res.status === 'error') {
+        expect(res.message).not.toContain(rawSecretPrompt);
+        expect(res.message).not.toContain(rawInternalStack);
+        expect(res.message).toBe('Something went wrong. Your prompt was not sent.');
+        const serialized = JSON.stringify(res);
+        expect(serialized).not.toContain(rawSecretPrompt);
+        expect(serialized).not.toContain('10.0.0.1');
+        expect(serialized).not.toContain('internal.ts');
+      }
     });
   });
 });

@@ -43,6 +43,13 @@ interface RecentFlaggedScan {
   categories: string[];
 }
 
+interface ProtectionSummary {
+  forwardedCount: number;
+  forwardedWithFindingsCount: number;
+  blockedCount: number;
+  totalSensitiveItems: number;
+}
+
 interface Aggregates {
   totalScans: number;
   blockedCount: number;
@@ -53,12 +60,18 @@ interface Aggregates {
   categoriesCount: Record<string, number>;
   categoryDetails: CategoryDetail[];
   recentFlaggedScans: RecentFlaggedScan[];
+  protectionSummary?: ProtectionSummary;
+  hourlyScans?: Array<{ hour: number; count: number }>;
+  mostActiveHourText?: string | null;
   decisionsCount: Record<string, number>;
   riskOverTime: Array<{ date: string; averageRisk: number; count: number }>;
 }
 
 interface LogsApiResponse {
   rows: AuditRow[];
+  totalCount?: number;
+  nextCursor?: { createdAt: string; id: number } | null;
+  hasMore?: boolean;
   aggregates: Aggregates;
   error?: string;
 }
@@ -98,12 +111,18 @@ export default function DashboardPage() {
   const [toDate, setToDate] = useState<string>('');
   const [filterDecision, setFilterDecision] = useState<string>('all');
   const [filterLevel, setFilterLevel] = useState<string>('all');
-  const [limit, setLimit] = useState<number>(200);
+  const [rowsPerPage, setRowsPerPage] = useState<number>(25);
 
-  // Table Pagination & Row Expansion State
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(15);
+  // Pagination & Cursor State
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [nextCursor, setNextCursor] = useState<{ createdAt: string; id: number } | null>(null);
+  const [hasMore, setHasMore] = useState<boolean>(false);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
+
+  // CSV Export Status
+  const [csvNotice, setCsvNotice] = useState<string | null>(null);
+  const [isExportingCsv, setIsExportingCsv] = useState<boolean>(false);
 
   // Hash Chain Integrity State & Block Animation
   const [isVerifying, setIsVerifying] = useState(false);
@@ -143,9 +162,13 @@ export default function DashboardPage() {
 
   // Fetch telemetry logs from server
   const fetchLogs = useCallback(
-    async (codeToUse: string) => {
+    async (codeToUse: string, isLoadMore = false) => {
       if (!codeToUse) return;
-      setIsLoading(true);
+      if (isLoadMore) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoading(true);
+      }
       setAuthError(null);
       setFetchError(null);
 
@@ -155,7 +178,19 @@ export default function DashboardPage() {
         if (toDate) queryParams.set('to', `${toDate}T23:59:59.999Z`);
         if (filterDecision !== 'all') queryParams.set('decision', filterDecision);
         if (filterLevel !== 'all') queryParams.set('level', filterLevel);
-        queryParams.set('limit', String(limit));
+        queryParams.set('limit', String(rowsPerPage));
+        queryParams.set('range', trendRange);
+
+        const viewerTz =
+          typeof Intl !== 'undefined' && Intl.DateTimeFormat
+            ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+            : 'UTC';
+        queryParams.set('timezone', viewerTz);
+
+        if (isLoadMore && nextCursor) {
+          queryParams.set('cursorCreatedAt', nextCursor.createdAt);
+          queryParams.set('cursorId', String(nextCursor.id));
+        }
 
         const res = await fetch(`/api/audit/logs?${queryParams.toString()}`, {
           method: 'GET',
@@ -181,18 +216,25 @@ export default function DashboardPage() {
         if (data.error) {
           setFetchError(data.error);
         } else {
-          setRows(data.rows || []);
+          if (isLoadMore) {
+            setRows((prev) => [...prev, ...(data.rows || [])]);
+          } else {
+            setRows(data.rows || []);
+          }
+          setTotalCount(data.totalCount ?? data.aggregates?.totalScans ?? data.rows?.length ?? 0);
+          setNextCursor(data.nextCursor ?? null);
+          setHasMore(Boolean(data.hasMore));
           setAggregates(data.aggregates || null);
           setIsAuthenticated(true);
-          setCurrentPage(1);
         }
       } catch {
         setFetchError('Network error: Unable to reach audit telemetry API.');
       } finally {
         setIsLoading(false);
+        setIsLoadingMore(false);
       }
     },
-    [fromDate, toDate, filterDecision, filterLevel, limit]
+    [fromDate, toDate, filterDecision, filterLevel, rowsPerPage, trendRange, nextCursor]
   );
 
   // Handle Passcode Submission
@@ -202,15 +244,16 @@ export default function DashboardPage() {
       setAuthError('Please enter a passcode.');
       return;
     }
-    await fetchLogs(passcode);
+    await fetchLogs(passcode, false);
   };
 
   // Re-fetch when filters change if authenticated
   useEffect(() => {
     if (isAuthenticated && passcode) {
-      fetchLogs(passcode);
+      setNextCursor(null);
+      fetchLogs(passcode, false);
     }
-  }, [fetchLogs, isAuthenticated, passcode]);
+  }, [fromDate, toDate, filterDecision, filterLevel, rowsPerPage, trendRange, isAuthenticated, passcode, fetchLogs]);
 
   // Clear Filters Handler
   const handleClearFilters = () => {
@@ -219,8 +262,8 @@ export default function DashboardPage() {
     setFilterDecision('all');
     setFilterLevel('all');
     setSelectedCategory(null);
-    setLimit(200);
-    setCurrentPage(1);
+    setRowsPerPage(25);
+    setNextCursor(null);
   };
 
   // Verify Integrity handler with sequential linked-block animation
@@ -279,53 +322,105 @@ export default function DashboardPage() {
     return `"${str}"`;
   };
 
-  // CSV Export Download
-  const handleDownloadCsv = () => {
-    if (!rows || rows.length === 0) return;
+  // CSV Export Download (downloads up to 5,000 matching rows, capped notice, formula-injection protection)
+  const handleDownloadCsv = async () => {
+    if (isExportingCsv) return;
+    setIsExportingCsv(true);
+    setCsvNotice(null);
 
-    const headers = [
-      'ID',
-      'Timestamp',
-      'Action',
-      'Decision',
-      'Risk Score',
-      'Categories',
-      'Masked Prompt',
-      'Prev Hash',
-      'Hash',
-    ];
+    try {
+      const queryParams = new URLSearchParams();
+      if (fromDate) queryParams.set('from', `${fromDate}T00:00:00.000Z`);
+      if (toDate) queryParams.set('to', `${toDate}T23:59:59.999Z`);
+      if (filterDecision !== 'all') queryParams.set('decision', filterDecision);
+      if (filterLevel !== 'all') queryParams.set('level', filterLevel);
+      queryParams.set('export', 'true');
+      queryParams.set('limit', '5000');
 
-    const csvLines = [headers.map(sanitizeCsvCell).join(',')];
+      const viewerTz =
+        typeof Intl !== 'undefined' && Intl.DateTimeFormat
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+          : 'UTC';
+      queryParams.set('timezone', viewerTz);
 
-    for (const r of rows) {
-      const cats = Array.isArray(r.categories) ? r.categories.join(';') : '';
-      const line = [
-        sanitizeCsvCell(r.id),
-        sanitizeCsvCell(r.created_at),
-        sanitizeCsvCell(r.action),
-        sanitizeCsvCell(r.decision),
-        sanitizeCsvCell(r.risk_score),
-        sanitizeCsvCell(cats),
-        sanitizeCsvCell(r.masked_prompt),
-        sanitizeCsvCell(r.prev_hash),
-        sanitizeCsvCell(r.hash),
-      ].join(',');
-      csvLines.push(line);
+      const res = await fetch(`/api/audit/logs?${queryParams.toString()}`, {
+        method: 'GET',
+        headers: {
+          'x-dashboard-passcode': passcode,
+        },
+      });
+
+      if (!res.ok) {
+        setCsvNotice('Failed to export CSV: server returned an error.');
+        return;
+      }
+
+      const data: LogsApiResponse = await res.json();
+      let exportRows = data.rows || [];
+
+      if (selectedCategory) {
+        exportRows = exportRows.filter(
+          (r) => Array.isArray(r.categories) && r.categories.includes(selectedCategory)
+        );
+      }
+
+      if (exportRows.length === 0) {
+        setCsvNotice('No matching records found to export.');
+        return;
+      }
+
+      if (data.rows && data.rows.length >= 5000) {
+        setCsvNotice('Notice: CSV export is capped at the maximum limit of 5,000 rows.');
+      }
+
+      const headers = [
+        'ID',
+        'Timestamp',
+        'Action',
+        'Decision',
+        'Risk Score',
+        'Categories',
+        'Sanitized Prompt',
+        'Prev Hash',
+        'Hash',
+      ];
+
+      const csvLines = [headers.map(sanitizeCsvCell).join(',')];
+
+      for (const r of exportRows) {
+        const cats = Array.isArray(r.categories) ? r.categories.join('; ') : '';
+        const line = [
+          sanitizeCsvCell(r.id),
+          sanitizeCsvCell(r.created_at),
+          sanitizeCsvCell(r.action),
+          sanitizeCsvCell(r.decision),
+          sanitizeCsvCell(r.risk_score),
+          sanitizeCsvCell(cats),
+          sanitizeCsvCell(r.masked_prompt),
+          sanitizeCsvCell(r.prev_hash),
+          sanitizeCsvCell(r.hash),
+        ].join(',');
+        csvLines.push(line);
+      }
+
+      const csvContent = csvLines.join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute(
+        'download',
+        `yapshield_audit_logs_${new Date().toISOString().slice(0, 10)}.csv`
+      );
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      setCsvNotice('Failed to export CSV due to a network error.');
+    } finally {
+      setIsExportingCsv(false);
     }
-
-    const csvContent = csvLines.join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute(
-      'download',
-      `yapshield_audit_logs_${new Date().toISOString().slice(0, 10)}.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   const handleCopyHash = async (id: number, text: string) => {
@@ -550,18 +645,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Relative time helper for recent flagged scans
-  const formatRelativeTime = (timestamp: string) => {
-    try {
-      const diff = Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
-      if (diff < 60) return `${Math.max(1, diff)}s ago`;
-      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-      return `${Math.floor(diff / 86400)}d ago`;
-    } catch {
-      return 'just now';
-    }
-  };
 
   // Chart Data: Top Detections Bar Chart
   const categoryChartData = useMemo(() => {
@@ -572,19 +655,111 @@ export default function DashboardPage() {
     }));
   }, [aggregates]);
 
-  // Chart Data: Risk Trends line chart with 7d, 30d, All toggle
-  const filteredRiskTrendData = useMemo(() => {
-    const data = aggregates?.riskOverTime || [];
-    if (trendRange === '7d') return data.slice(-7);
-    if (trendRange === '30d') return data.slice(-30);
-    return data;
-  }, [aggregates, trendRange]);
+  // Viewer IANA timezone
+  const viewerTz = useMemo(() => {
+    return typeof Intl !== 'undefined' && Intl.DateTimeFormat
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+      : 'UTC';
+  }, []);
 
-  // Latest point in the trend data
-  const latestTrendPoint = useMemo(() => {
-    if (filteredRiskTrendData.length === 0) return null;
-    return filteredRiskTrendData[filteredRiskTrendData.length - 1];
-  }, [filteredRiskTrendData]);
+  // Chart Data: Risk Trends line chart with real calendar time axis and gaps
+  const { chartTrendData, recordedDaysCount, latestTrendPoint } = useMemo(() => {
+    const rawData = aggregates?.riskOverTime || [];
+    const dataMap = new Map<string, { averageRisk: number; count: number }>();
+    for (const item of rawData) {
+      dataMap.set(item.date, { averageRisk: item.averageRisk, count: item.count });
+    }
+
+    const formatDateKey = (d: Date): string => {
+      try {
+        return new Intl.DateTimeFormat('en-CA', {
+          timeZone: viewerTz,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(d);
+      } catch {
+        return d.toISOString().slice(0, 10);
+      }
+    };
+
+    const now = new Date();
+    const todayKey = formatDateKey(now);
+
+    let dateList: string[] = [];
+
+    if (trendRange === '7d') {
+      // Last 7 calendar days including today
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+        dateList.push(formatDateKey(d));
+      }
+      dateList = Array.from(new Set(dateList));
+    } else if (trendRange === '30d') {
+      // Last 30 calendar days including today
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+        dateList.push(formatDateKey(d));
+      }
+      dateList = Array.from(new Set(dateList));
+    } else {
+      // All: continuous calendar span from earliest recorded scan to today
+      if (rawData.length === 0) {
+        dateList = [];
+      } else {
+        const sortedDates = rawData.map((d) => d.date).sort();
+        const minDateStr = sortedDates[0];
+        const maxDateStr =
+          sortedDates[sortedDates.length - 1] > todayKey
+            ? sortedDates[sortedDates.length - 1]
+            : todayKey;
+
+        const cur = new Date(minDateStr + 'T12:00:00Z');
+        const end = new Date(maxDateStr + 'T12:00:00Z');
+        const diffDays = Math.round(
+          (end.getTime() - cur.getTime()) / (24 * 60 * 60 * 1000)
+        );
+
+        if (diffDays >= 0 && diffDays <= 365) {
+          for (let d = new Date(cur); d <= end; d.setDate(d.getDate() + 1)) {
+            dateList.push(formatDateKey(d));
+          }
+          dateList = Array.from(new Set(dateList));
+        } else {
+          dateList = sortedDates;
+        }
+      }
+    }
+
+    const points: Array<{ date: string; averageRisk: number | null; count: number }> = [];
+    let recordedCount = 0;
+    let latest: { date: string; averageRisk: number; count: number } | null = null;
+
+    for (const dKey of dateList) {
+      const entry = dataMap.get(dKey);
+      if (entry && entry.count > 0) {
+        recordedCount++;
+        latest = { date: dKey, averageRisk: entry.averageRisk, count: entry.count };
+        points.push({
+          date: dKey,
+          averageRisk: entry.averageRisk,
+          count: entry.count,
+        });
+      } else {
+        points.push({
+          date: dKey,
+          averageRisk: null,
+          count: 0,
+        });
+      }
+    }
+
+    return {
+      chartTrendData: points,
+      recordedDaysCount: recordedCount,
+      latestTrendPoint: latest,
+    };
+  }, [aggregates, trendRange, viewerTz]);
 
   // Filtered rows for logs table (incorporating selectedCategory from Data at Risk panel)
   const displayRows = useMemo(() => {
@@ -593,12 +768,6 @@ export default function DashboardPage() {
       (r) => Array.isArray(r.categories) && r.categories.includes(selectedCategory)
     );
   }, [rows, selectedCategory]);
-
-  // Pagination Slice
-  const totalPages = Math.max(1, Math.ceil(displayRows.length / pageSize));
-  const paginatedRows = useMemo(() => {
-    return displayRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  }, [displayRows, currentPage, pageSize]);
 
   // Linked Blocks Count calculation
   const totalEntriesForBlocks = aggregates?.totalScans || rows.length || 8;
@@ -910,8 +1079,9 @@ export default function DashboardPage() {
                     <div className="flex-shrink-0">
                       <RiskGauge
                         score={Math.round(aggregates.averageRisk)}
-                        size={82}
+                        size={96}
                         strokeWidth={7}
+                        labelPosition="below"
                       />
                     </div>
                   </div>
@@ -985,47 +1155,112 @@ export default function DashboardPage() {
                       )}
                     </div>
 
-                    {/* Sub-list: Recent flagged scans (Last 8) - NEVER leaks prompt text, user id, or IP */}
-                    <div className="pt-3 border-t border-[var(--border)] space-y-2 flex-1">
-                      <div className="text-[11px] font-mono font-semibold text-[var(--text-dim)] uppercase tracking-wider flex items-center justify-between">
-                        <span>Recent flagged scans (Last 8)</span>
-                        <span className="text-[10px] text-[var(--text-dim)]">Metadata only</span>
+                    {/* Protection summary - server computed, never leaks prompt text, user id, or IP */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                      <div className="text-[11px] font-mono font-semibold text-[var(--text-dim)] uppercase tracking-wider">
+                        Protection summary
+                      </div>
+                      {aggregates.protectionSummary ? (
+                        <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+                          <div className="p-2 rounded bg-[var(--surface-2)] border border-[var(--border)]">
+                            <div className="text-[10px] text-[var(--text-dim)] truncate">Forwarded to AI</div>
+                            <div className="text-base font-semibold text-[var(--text)] mt-0.5">
+                              {aggregates.protectionSummary.forwardedCount.toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="p-2 rounded bg-[var(--surface-2)] border border-[var(--border)]">
+                            <div className="text-[10px] text-[var(--text-dim)] truncate">Sanitized before AI</div>
+                            <div className="text-base font-semibold text-[var(--accent)] mt-0.5">
+                              {aggregates.protectionSummary.forwardedWithFindingsCount.toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="p-2 rounded bg-[var(--surface-2)] border border-[var(--border)]">
+                            <div className="text-[10px] text-[var(--text-dim)] truncate">Stopped before AI</div>
+                            <div className="text-base font-semibold text-[var(--critical)] mt-0.5">
+                              {aggregates.protectionSummary.blockedCount.toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="p-2 rounded bg-[var(--surface-2)] border border-[var(--border)]">
+                            <div className="text-[10px] text-[var(--text-dim)] truncate">Sensitive items found</div>
+                            <div className="text-base font-semibold text-[var(--warn)] mt-0.5">
+                              {aggregates.protectionSummary.totalSensitiveItems.toLocaleString()}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-[var(--text-dim)] font-mono py-2">
+                          Protection summary unavailable
+                        </div>
+                      )}
+                    </div>
+
+                    {/* When scans happen - 24-hour activity bar chart in viewer timezone */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-dim)]">
+                        <span className="font-semibold uppercase tracking-wider">When scans happen</span>
+                        {aggregates.mostActiveHourText ? (
+                          <span className="text-[10px] text-[var(--accent)] font-semibold">
+                            Peak: {aggregates.mostActiveHourText}
+                          </span>
+                        ) : null}
                       </div>
 
-                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 font-mono text-[11px]" tabIndex={0} aria-label="Recent flagged scans list">
-                        {aggregates.recentFlaggedScans && aggregates.recentFlaggedScans.length > 0 ? (
-                          aggregates.recentFlaggedScans.map((scan, i) => (
-                            <div
-                              key={i}
-                              className="p-1.5 rounded bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-between gap-2"
+                      <p className="sr-only">
+                        24-bar distribution of scans by hour of day (0 to 23) in viewer timezone. {aggregates.mostActiveHourText ? `Most active hour: ${aggregates.mostActiveHourText}.` : 'No scans recorded.'}
+                      </p>
+
+                      {aggregates.hourlyScans && aggregates.hourlyScans.length === 24 ? (
+                        <div className="h-16 w-full pt-1">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart
+                              data={aggregates.hourlyScans}
+                              margin={{ top: 2, right: 2, left: 2, bottom: 2 }}
                             >
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="text-[10px] text-[var(--text-dim)] whitespace-nowrap">
-                                  {formatRelativeTime(scan.createdAt)}
-                                </span>
-                                <div className="flex flex-wrap gap-1 truncate">
-                                  {scan.categories.map((c, ci) => (
-                                    <span
-                                      key={ci}
-                                      className="px-1 py-0.2 rounded text-[9px] bg-[var(--bg)] border border-[var(--border)] text-[var(--text-dim)]"
-                                    >
-                                      {c}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5 flex-shrink-0">
-                                {renderDecisionBadge(scan.decision)}
-                                {renderRiskBadge(scan.riskScore)}
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-xs text-[var(--text-dim)] py-2 text-center font-mono">
-                            No flagged scans in current dataset.
+                              <Tooltip
+                                content={({ active, payload }) => {
+                                  if (active && payload && payload.length) {
+                                    const item = payload[0].payload;
+                                    const h = item.hour % 24;
+                                    const period = h >= 12 ? 'PM' : 'AM';
+                                    const displayHour = h % 12 === 0 ? 12 : h % 12;
+                                    const label12 = `${displayHour} ${period}`;
+                                    return (
+                                      <div
+                                        style={{
+                                          backgroundColor: chartColors.tooltipBg,
+                                          borderColor: chartColors.tooltipBorder,
+                                        }}
+                                        className="p-1.5 border rounded shadow text-[10px] font-mono"
+                                      >
+                                        <span className="text-[var(--accent)] font-semibold">{label12}</span>:{' '}
+                                        <span className="text-[var(--text)]">{item.count} scans</span>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                }}
+                              />
+                              <Bar
+                                dataKey="count"
+                                fill={chartColors.accent}
+                                radius={[1, 1, 0, 0]}
+                                isAnimationActive={!hasAnimatedCharts}
+                              />
+                            </BarChart>
+                          </ResponsiveContainer>
+                          <div className="flex justify-between text-[9px] text-[var(--text-dim)] font-mono px-0.5 mt-0.5">
+                            <span>12 AM</span>
+                            <span>6 AM</span>
+                            <span>12 PM</span>
+                            <span>6 PM</span>
+                            <span>11 PM</span>
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-[var(--text-dim)] font-mono py-2">
+                          Hourly activity data unavailable
+                        </div>
+                      )}
                     </div>
                   </div>
                 </HudPanel>
@@ -1091,10 +1326,10 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="min-h-[220px]">
-                      {filteredRiskTrendData.length > 0 ? (
+                      {recordedDaysCount > 0 ? (
                         <ResponsiveContainer width="100%" height={220}>
                           <LineChart
-                            data={filteredRiskTrendData}
+                            data={chartTrendData}
                             margin={{ top: 20, right: 20, left: -20, bottom: 20 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
@@ -1142,12 +1377,20 @@ export default function DashboardPage() {
                                       <div className="font-semibold text-[var(--accent)]">
                                         Date: {item.date}
                                       </div>
-                                      <div className="text-[var(--text)]">
-                                        Average risk: <strong className="text-[var(--warn)]">{item.averageRisk}</strong> / 100
-                                      </div>
-                                      <div className="text-[var(--text-dim)]">
-                                        Scans: {item.count}
-                                      </div>
+                                      {item.averageRisk !== null ? (
+                                        <>
+                                          <div className="text-[var(--text)]">
+                                            Average risk: <strong className="text-[var(--warn)]">{item.averageRisk}</strong> / 100
+                                          </div>
+                                          <div className="text-[var(--text-dim)]">
+                                            Scans: {item.count}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <div className="text-[var(--text-dim)]">
+                                          No scans recorded
+                                        </div>
+                                      )}
                                     </div>
                                   );
                                 }
@@ -1159,12 +1402,16 @@ export default function DashboardPage() {
                               dataKey="averageRisk"
                               stroke={chartColors.warn}
                               strokeWidth={2}
+                              connectNulls={false}
                               isAnimationActive={!hasAnimatedCharts}
                               animationDuration={800}
-                              dot={(props: { cx?: number; cy?: number; index?: number; payload?: { averageRisk: number } }) => {
+                              dot={(props: { cx?: number; cy?: number; index?: number; payload?: { date: string; averageRisk: number | null; count: number } }) => {
                                 const { cx = 0, cy = 0, index = 0, payload } = props;
-                                const isLatest = index === filteredRiskTrendData.length - 1;
-                                if (isLatest && payload) {
+                                if (!payload || payload.averageRisk === null || payload.averageRisk === undefined) {
+                                  return null;
+                                }
+                                const isLatest = latestTrendPoint && payload.date === latestTrendPoint.date;
+                                if (isLatest) {
                                   return (
                                     <g key={`dot-${index}`}>
                                       <circle
@@ -1213,19 +1460,19 @@ export default function DashboardPage() {
                         </ResponsiveContainer>
                       ) : (
                         <div className="h-[220px] flex items-center justify-center text-xs text-[var(--text-dim)] font-mono">
-                          No chronological risk entries in selected range.
+                          No scans in this range
                         </div>
                       )}
                     </div>
 
                     {/* Accessible summary */}
                     <p className="sr-only">
-                      Line chart tracking average risk severity over {filteredRiskTrendData.length} chronological days with y-axis from 0 to 100.
+                      Line chart tracking average risk severity over {recordedDaysCount} recorded days with y-axis from 0 to 100.
                     </p>
                     <div className="flex items-center justify-between text-xs text-[var(--text-dim)] pt-2 border-t border-[var(--border)] font-mono">
                       <span>
-                        {filteredRiskTrendData.length}{' '}
-                        {filteredRiskTrendData.length === 1 ? 'day recorded' : 'days recorded'}
+                        {recordedDaysCount}{' '}
+                        {recordedDaysCount === 1 ? 'day recorded' : 'days recorded'}
                       </span>
                       {latestTrendPoint && (
                         <span>
@@ -1233,7 +1480,8 @@ export default function DashboardPage() {
                           <strong className="text-[var(--accent)]">
                             {latestTrendPoint.averageRisk}/100
                           </strong>{' '}
-                          on {latestTrendPoint.date} ({latestTrendPoint.count} scans)
+                          on {latestTrendPoint.date} ({latestTrendPoint.count}{' '}
+                          {latestTrendPoint.count === 1 ? 'scan' : 'scans'})
                         </span>
                       )}
                     </div>
@@ -1595,8 +1843,7 @@ export default function DashboardPage() {
                         Audit log
                       </h2>
                       <p className="text-xs text-[var(--text-dim)] font-mono">
-                        Showing {displayRows.length} {displayRows.length === 1 ? 'record' : 'records'}
-                        {aggregates && aggregates.totalScans > displayRows.length && ` (of ${aggregates.totalScans} total)`}
+                        Showing {displayRows.length} of {totalCount} records
                         {selectedCategory && (
                           <span className="ml-2 text-[var(--accent)] font-semibold">
                             Filtered by: {selectedCategory}
@@ -1605,6 +1852,24 @@ export default function DashboardPage() {
                       </p>
                     </div>
                   </div>
+
+                  {/* CSV Export Notice */}
+                  {csvNotice && (
+                    <div
+                      role="status"
+                      className="p-2.5 rounded bg-amber-950/70 border border-amber-600 text-amber-200 text-xs font-mono flex items-center justify-between gap-2"
+                    >
+                      <span>{csvNotice}</span>
+                      <button
+                        type="button"
+                        onClick={() => setCsvNotice(null)}
+                        aria-label="Dismiss notice"
+                        className="text-amber-300 hover:text-white px-1.5 py-0.5 rounded"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
 
                   {/* Filter Bar */}
                   <div className="p-3 bg-[var(--surface-2)] border border-[var(--border)] rounded flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -1683,17 +1948,22 @@ export default function DashboardPage() {
                         </button>
                       )}
 
-                      <select
-                        aria-label="Limit results fetched from server"
-                        value={limit}
-                        onChange={(e) => setLimit(Number(e.target.value))}
-                        className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
-                      >
-                        <option value={50}>Limit 50</option>
-                        <option value={100}>Limit 100</option>
-                        <option value={200}>Limit 200</option>
-                        <option value={500}>Limit 500</option>
-                      </select>
+                      <div className="flex items-center gap-1.5 font-mono text-xs">
+                        <label htmlFor="rowsPerPageSelect" className="text-[var(--text-dim)] text-[11px] whitespace-nowrap">
+                          Rows per page:
+                        </label>
+                        <select
+                          id="rowsPerPageSelect"
+                          aria-label="Rows per page"
+                          value={rowsPerPage}
+                          onChange={(e) => setRowsPerPage(Number(e.target.value))}
+                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                        >
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
 
@@ -1715,8 +1985,8 @@ export default function DashboardPage() {
                       </thead>
 
                       <tbody className="divide-y divide-[var(--border)] text-[var(--text)]">
-                        {paginatedRows.length > 0 ? (
-                          paginatedRows.map((row) => {
+                        {displayRows.length > 0 ? (
+                          displayRows.map((row) => {
                             const isExpanded = expandedRowId === row.id;
                             const shortenedPrompt =
                               row.masked_prompt && row.masked_prompt.length > 70
@@ -1867,55 +2137,45 @@ export default function DashboardPage() {
                     </table>
                   </div>
 
-                  {/* Pagination Controls */}
+                  {/* Cursor-based Pagination & Load More */}
                   {displayRows.length > 0 && (
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 text-xs text-[var(--text-dim)] font-mono">
-                      <div className="flex items-center gap-2">
-                        <span>Rows per page:</span>
-                        <select
-                          value={pageSize}
-                          aria-label="Select rows per page"
-                          onChange={(e) => {
-                            setPageSize(Number(e.target.value));
-                            setCurrentPage(1);
-                          }}
-                          className="bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-[var(--border)] text-xs text-[var(--text-dim)] font-mono">
+                      <span>
+                        Showing {displayRows.length} of {totalCount} records
+                      </span>
+
+                      {hasMore && rows.length < totalCount ? (
+                        <button
+                          type="button"
+                          onClick={() => fetchLogs(passcode, true)}
+                          disabled={isLoadingMore}
+                          className="btn-secondary h-8 px-4 text-xs font-mono inline-flex items-center gap-2"
                         >
-                          <option value={10}>10</option>
-                          <option value={15}>15</option>
-                          <option value={25}>25</option>
-                          <option value={50}>50</option>
-                        </select>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span>
-                          Page <strong className="text-[var(--text)]">{currentPage}</strong> of{' '}
-                          <strong className="text-[var(--text)]">{totalPages}</strong>
+                          {isLoadingMore && (
+                            <svg
+                              className="w-3.5 h-3.5 animate-spin text-[var(--accent)]"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              aria-hidden="true"
+                            >
+                              <circle
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                strokeDasharray="32"
+                                strokeDashoffset="12"
+                              />
+                            </svg>
+                          )}
+                          <span>{isLoadingMore ? 'Loading more records...' : 'Load more'}</span>
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-[var(--text-dim)]">
+                          All {displayRows.length} matching records loaded
                         </span>
-
-                        <div className="inline-flex gap-1 ml-2">
-                          <button
-                            type="button"
-                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                            disabled={currentPage === 1}
-                            aria-label="Go to previous page"
-                            className="px-2.5 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface)] border border-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--text)] transition"
-                          >
-                            ← Prev
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                            disabled={currentPage >= totalPages}
-                            aria-label="Go to next page"
-                            className="px-2.5 py-1 rounded bg-[var(--surface-2)] hover:bg-[var(--surface)] border border-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--text)] transition"
-                          >
-                            Next →
-                          </button>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -15,6 +15,7 @@ import {
   SensitiveLogContext,
   getClientIp,
   checkRateLimit,
+  classifyGatewayError,
 } from '@/lib/gateway';
 import { makeGeminiLlm } from '@/lib/gateway/gemini';
 import { SupabaseVaultStore } from '@/lib/vault/supabaseStore';
@@ -252,8 +253,14 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     // FAIL CLOSED: any unexpected unhandled error returns safe fail-closed error
     logGatewayError(stage, error);
+    const errorInfo = classifyGatewayError(error, stage);
     return NextResponse.json(
-      { status: 'error', message: 'Request blocked for safety' },
+      {
+        status: 'error',
+        code: errorInfo.code,
+        reason: errorInfo.reason,
+        message: errorInfo.message,
+      },
       { status: 500, headers: { 'Cache-Control': 'no-store' } }
     );
   }

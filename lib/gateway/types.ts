@@ -2,6 +2,9 @@ import { DetectionType } from '../detectors/types';
 import { Action, RiskScore } from '../policy/types';
 import { VaultStore } from '../vault/store';
 import { AuditStore } from '../audit/store';
+import { GatewayErrorCode } from './errors';
+
+export type { GatewayErrorCode };
 
 export interface GatewayOverride {
   type: DetectionType;
@@ -39,7 +42,8 @@ export interface GatewayTimings {
 
 export interface GatewayDeps {
   llm: (
-    sanitizedPrompt: string
+    sanitizedPrompt: string,
+    options?: { signal?: AbortSignal }
   ) => Promise<string | { text: string; model?: string; attempts?: number }>;
   vaultStore: VaultStore;
   auditStore: AuditStore;
@@ -89,6 +93,8 @@ export type GatewayResult =
     }
   | {
       status: 'error';
+      code: GatewayErrorCode;
+      reason: GatewayErrorCode;
       message: string;
       timings?: GatewayTimings;
     };

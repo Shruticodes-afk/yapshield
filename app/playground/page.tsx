@@ -504,9 +504,37 @@ export default function PlaygroundPage() {
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sendError, setSendError] = useState<{
+    isBlocked?: boolean;
+    code?: string;
     message: string;
     reasons?: string[];
   } | null>(null);
+  const [sendElapsedSeconds, setSendElapsedSeconds] = useState(0);
+  const sendTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const sendAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Clean up send timer and abort controller on unmount
+  useEffect(() => {
+    return () => {
+      if (sendTimerRef.current) clearInterval(sendTimerRef.current);
+      if (sendAbortControllerRef.current) sendAbortControllerRef.current.abort();
+    };
+  }, []);
+
+  const handleCancelSend = useCallback(() => {
+    if (sendAbortControllerRef.current) {
+      sendAbortControllerRef.current.abort();
+      sendAbortControllerRef.current = null;
+    }
+    if (sendTimerRef.current) {
+      clearInterval(sendTimerRef.current);
+      sendTimerRef.current = null;
+    }
+    setIsSending(false);
+    setIsRetrying(false);
+    setSendElapsedSeconds(0);
+    setSendError(null);
+  }, []);
 
   const [isAiDetailsOpen, setIsAiDetailsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -633,6 +661,7 @@ export default function PlaygroundPage() {
 
     if (prompt.length > 4000) {
       setSendError({
+        isBlocked: false,
         message: 'Prompt exceeds maximum length of 4000 characters.',
       });
       return;
@@ -641,6 +670,15 @@ export default function PlaygroundPage() {
     setIsSending(true);
     setIsRetrying(false);
     setSendError(null);
+    setSendElapsedSeconds(0);
+
+    if (sendTimerRef.current) clearInterval(sendTimerRef.current);
+    sendTimerRef.current = setInterval(() => {
+      setSendElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    const controller = new AbortController();
+    sendAbortControllerRef.current = controller;
 
     // If request takes longer than 3.5s, display retry state from real gateway backoff
     const retryTimer = setTimeout(() => {
@@ -653,7 +691,12 @@ export default function PlaygroundPage() {
       const finding = scanResult.findings[idx];
       if (finding && override.action !== finding.action && !override.reason.trim()) {
         clearTimeout(retryTimer);
+        if (sendTimerRef.current) {
+          clearInterval(sendTimerRef.current);
+          sendTimerRef.current = null;
+        }
         setSendError({
+          isBlocked: false,
           message: `Please provide a reason for overriding ${finding.type}.`,
         });
         setIsSending(false);
@@ -681,6 +724,7 @@ export default function PlaygroundPage() {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
           prompt,
           mode: 'send',
@@ -692,7 +736,10 @@ export default function PlaygroundPage() {
 
       if (response.status === 429) {
         setSendError({
-          message: 'Too many requests, please wait a few minutes',
+          isBlocked: false,
+          code: 'llm_busy',
+          message:
+            'The AI service is busy right now. Your prompt was not sent. Please try again in a minute.',
         });
         return;
       }
@@ -701,6 +748,8 @@ export default function PlaygroundPage() {
 
       if (response.status === 400) {
         setSendError({
+          isBlocked: false,
+          code: 'internal',
           message:
             data.message && data.message.includes('4000')
               ? 'Prompt exceeds maximum length of 4000 characters.'
@@ -711,6 +760,7 @@ export default function PlaygroundPage() {
 
       if (data.status === 'blocked') {
         setSendError({
+          isBlocked: true,
           message: data.message || 'Prompt blocked by policy.',
           reasons: data.reasons || [],
         });
@@ -723,17 +773,36 @@ export default function PlaygroundPage() {
       ) {
         setSendResult(data as SendResponse);
         setSendError(null);
+      } else if (data.status === 'error') {
+        setSendError({
+          isBlocked: false,
+          code: data.code || data.reason || 'internal',
+          message: data.message || 'Something went wrong. Your prompt was not sent.',
+        });
       } else {
         setSendError({
-          message: data.message || 'The gateway could not process this request.',
+          isBlocked: false,
+          code: 'internal',
+          message: data.message || 'Something went wrong. Your prompt was not sent.',
         });
       }
     } catch {
+      if (controller.signal.aborted) {
+        // Canceled by user - restore screen and do not show an error
+        return;
+      }
       setSendError({
+        isBlocked: false,
+        code: 'llm_timeout',
         message: 'Could not reach the gateway API.',
       });
     } finally {
       clearTimeout(retryTimer);
+      if (sendTimerRef.current) {
+        clearInterval(sendTimerRef.current);
+        sendTimerRef.current = null;
+      }
+      sendAbortControllerRef.current = null;
       setIsSending(false);
       setIsRetrying(false);
     }
@@ -887,7 +956,12 @@ export default function PlaygroundPage() {
     pipelineCompletedCount = 4;
     pipelineActiveIndex = 4; // 'Send'
     pipelineProgress = 75;
-    pipelineStatusText = isRetrying ? 'The AI is busy, retrying...' : 'Dispatching to LLM...';
+    pipelineStatusText =
+      sendElapsedSeconds >= 8
+        ? 'The AI is slow, still trying...'
+        : isRetrying
+        ? 'The AI is busy, retrying...'
+        : `Sending to AI... ${sendElapsedSeconds} s`;
   } else if (scanResult) {
     if (isBlocked) {
       pipelineCompletedCount = 3;
@@ -1185,41 +1259,103 @@ export default function PlaygroundPage() {
                         : 'Forward sanitized prompt with reversible tokenization.'}
                     </p>
 
-                    <button
-                      type="button"
-                      onClick={handleSend}
-                      disabled={isBlocked || isSending}
-                      aria-label="Send sanitized prompt to AI"
-                      className={`btn-primary shrink-0 ${
-                        isBlocked || isSending ? 'opacity-50 cursor-not-allowed' : ''
-                      }`}
-                    >
-                      {isSending ? (
-                        <>
-                          <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true" />
-                          <span>Sending to AI...</span>
-                        </>
-                      ) : isBlocked ? (
-                        'Send blocked by policy'
-                      ) : (
-                        'Send to AI'
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleSend}
+                        disabled={isBlocked || isSending}
+                        aria-label="Send sanitized prompt to AI"
+                        className={`btn-primary shrink-0 ${
+                          isBlocked || isSending ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                      >
+                        {isSending ? (
+                          <>
+                            <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+                            <span>Sending to AI... {sendElapsedSeconds} s</span>
+                          </>
+                        ) : isBlocked ? (
+                          'Send blocked by policy'
+                        ) : (
+                          'Send to AI'
+                        )}
+                      </button>
+
+                      {isSending && (
+                        <button
+                          type="button"
+                          onClick={handleCancelSend}
+                          aria-label="Cancel sending prompt"
+                          className="btn-secondary h-9 px-3 text-xs shrink-0 font-medium"
+                        >
+                          Cancel
+                        </button>
                       )}
-                    </button>
+                    </div>
                   </div>
 
-                  {sendError && (
+                  {isSending && sendElapsedSeconds >= 8 && (
+                    <div className="mt-3 p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-mono flex items-center gap-2 animate-pulse">
+                      <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" />
+                        <polyline points="12 6 12 12 16 14" />
+                      </svg>
+                      <span>The AI is slow, still trying...</span>
+                    </div>
+                  )}
+
+                  {/* Policy Block Error (Red Style) */}
+                  {sendError && sendError.isBlocked && (
                     <div
                       role="alert"
-                      className="mt-3 p-3 rounded bg-red-500/10 border border-red-500/40 text-red-600 dark:text-red-300 text-xs space-y-1"
+                      className="mt-3 p-3.5 rounded bg-red-500/10 border border-red-500/40 text-red-600 dark:text-red-300 text-xs space-y-2"
                     >
-                      <p className="font-semibold">{sendError.message}</p>
+                      <div className="flex items-center gap-2 font-semibold text-rose-600 dark:text-rose-300">
+                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                        </svg>
+                        <span>Blocked by policy</span>
+                      </div>
+                      {sendError.message && (
+                        <p className="leading-relaxed">{sendError.message}</p>
+                      )}
                       {sendError.reasons && sendError.reasons.length > 0 && (
-                        <ul className="list-disc list-inside space-y-0.5 text-red-600 dark:text-red-300">
+                        <ul className="list-disc list-inside space-y-1 text-red-600 dark:text-red-300 pl-1">
                           {sendError.reasons.map((reason, idx) => (
-                            <li key={idx}>{reason}</li>
+                            <li key={idx} className="leading-relaxed">{reason}</li>
                           ))}
                         </ul>
                       )}
+                    </div>
+                  )}
+
+                  {/* Technical Gateway Error (Neutral Warning Style) */}
+                  {sendError && !sendError.isBlocked && (
+                    <div
+                      role="alert"
+                      className="mt-3 p-3.5 rounded bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text)] text-xs space-y-2.5 shadow-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 font-semibold text-amber-600 dark:text-amber-400">
+                          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                          </svg>
+                          <span>Could not reach the AI</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSend}
+                          className="btn-secondary h-7 px-2.5 text-xs font-semibold hover:border-[var(--accent)]"
+                        >
+                          Try again
+                        </button>
+                      </div>
+                      <p className="text-[var(--text)] leading-relaxed">
+                        {sendError.message}
+                      </p>
                     </div>
                   )}
                 </HudPanel>
@@ -1333,18 +1469,35 @@ export default function PlaygroundPage() {
               >
                 {isScanning ? 'Scanning...' : 'Scan Prompt'}
               </button>
+            ) : isSending ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled
+                  className="btn-primary h-9 px-3 text-xs font-semibold opacity-75 cursor-not-allowed"
+                >
+                  Sending... {sendElapsedSeconds} s
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelSend}
+                  className="btn-secondary h-9 px-3 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={isSending || isBlocked}
+                disabled={isBlocked}
                 className={`h-9 px-4 text-xs font-semibold rounded-md transition ${
                   isBlocked
                     ? 'bg-rose-500/20 text-rose-500 border border-rose-500/40 cursor-not-allowed'
                     : 'btn-primary'
                 }`}
               >
-                {isSending ? 'Sending...' : isBlocked ? 'Blocked' : 'Send to AI'}
+                {isBlocked ? 'Blocked' : 'Send to AI'}
               </button>
             )}
           </div>

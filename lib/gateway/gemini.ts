@@ -106,51 +106,79 @@ export function isRetryable(error: unknown): boolean {
 }
 
 /**
- * Executes an async function with a timeout limit.
+ * Executes an async function with a timeout limit and optional abort signal.
  */
 async function withTimeout<T>(
   promiseFn: () => Promise<T>,
-  ms: number
+  ms: number,
+  signal?: AbortSignal
 ): Promise<T> {
   let timer: NodeJS.Timeout | null = null;
+  let onAbort: (() => void) | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('Request timed out: overall gateway budget exceeded');
+      err.name = 'TimeoutError';
+      reject(err);
+      return;
+    }
     timer = setTimeout(() => {
       const err = new Error(`Request timed out after ${ms}ms`);
       err.name = 'TimeoutError';
       reject(err);
     }, ms);
+    if (signal) {
+      onAbort = () => {
+        const err = new Error('Request timed out: overall gateway budget exceeded');
+        err.name = 'TimeoutError';
+        reject(err);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 
   try {
     return await Promise.race([promiseFn(), timeoutPromise]);
   } finally {
     if (timer) clearTimeout(timer);
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('Request aborted');
+      err.name = 'AbortError';
+      return reject(err);
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      const err = new Error('Request aborted');
+      err.name = 'AbortError';
+      reject(err);
+    };
+    function cleanup() {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    }
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
 }
 
 /**
- * Total Worst-Case Time Budget Analysis (Vercel Serverless Function Limit):
+ * Total Worst-Case Time Budget Analysis (Hard 25s Ceiling):
  *
- * With default settings:
- * - GEMINI_MAX_RETRIES = 2 (1 initial call + up to 2 retries on primary model)
- * - GEMINI_TIMEOUT_MS = 15000 (15s per-attempt timeout)
- * - Backoff delays = 1000ms (attempt 1 -> 2) + 2000ms (attempt 2 -> 3) + ~200ms jitter each = ~3.4s max sleep
- * - Fallback model attempt = 1 call with timeoutMs
- *
- * Theoretical unbounded duration without deadline:
- *   15s (initial) + 1.2s (backoff) + 15s (retry 1) + 2.2s (backoff) + 15s (retry 2) + 15s (fallback) = 63.4s
- *
- * To guarantee that the total worst-case execution time stays strictly under 50 seconds
- * (comfortably within Vercel's maxDuration of 60 seconds), we enforce a hard 50,000 ms
- * overall time budget ceiling (MAX_TOTAL_BUDGET_MS = 50000). Every attempt and backoff
- * sleep is clamped to Math.min(timeoutMs, remainingBudget), ensuring the entire lifecycle
- * never exceeds 50 seconds.
+ * Enforces an overall deadline of 25 seconds for a send request across all Gemini
+ * attempts and fallback. Total retries must fit inside this cap.
  */
-export const MAX_TOTAL_BUDGET_MS = 50000;
+export const MAX_TOTAL_BUDGET_MS = 25000;
 
 export interface GeminiLlmResult {
   text: string;
@@ -159,7 +187,8 @@ export interface GeminiLlmResult {
 }
 
 export type GeminiLlmRunner = (
-  sanitizedPrompt: string
+  sanitizedPrompt: string,
+  options?: { signal?: AbortSignal }
 ) => Promise<string | GeminiLlmResult>;
 
 /**
@@ -213,8 +242,10 @@ export function makeGeminiLlm(
   );
 
   return async (
-    sanitizedPrompt: string
+    sanitizedPrompt: string,
+    callOptions?: { signal?: AbortSignal }
   ): Promise<{ text: string; model: string; attempts: number } | string> => {
+    const signal = callOptions?.signal;
     const startTime = Date.now();
     let lastError: unknown;
 
@@ -223,6 +254,14 @@ export function makeGeminiLlm(
 
     // 1. Try primary model up to 1 + maxRetries times (initial + up to maxRetries retries)
     for (let attempt = 1; attempt <= 1 + maxRetries; attempt++) {
+      if (signal?.aborted) {
+        const timeoutError = new Error(
+          `Request timed out: overall gateway budget exceeded`
+        );
+        timeoutError.name = 'TimeoutError';
+        throw timeoutError;
+      }
+
       const remaining = getRemainingBudget();
       if (remaining <= 0) {
         const timeoutError = new Error(
@@ -239,7 +278,7 @@ export function makeGeminiLlm(
           const result = await primaryModel.generateContent(sanitizedPrompt);
           const response = await result.response;
           return response.text();
-        }, effectiveTimeout);
+        }, effectiveTimeout, signal);
 
         return {
           text,
@@ -272,7 +311,7 @@ export function makeGeminiLlm(
           fallbackModelName.trim().length > 0
         ) {
           const remainingForFallback = getRemainingBudget();
-          if (remainingForFallback > 0) {
+          if (remainingForFallback > 0 && !signal?.aborted) {
             const effectiveFallbackTimeout = Math.min(
               timeoutMs,
               remainingForFallback
@@ -290,7 +329,7 @@ export function makeGeminiLlm(
                 );
                 const response = await result.response;
                 return response.text();
-              }, effectiveFallbackTimeout);
+              }, effectiveFallbackTimeout, signal);
 
               return {
                 text: fallbackText,
@@ -326,7 +365,7 @@ export function makeGeminiLlm(
           const remainingForSleep = getRemainingBudget();
           const delay = Math.min(baseDelay + jitter, remainingForSleep);
           if (delay > 0) {
-            await sleep(delay);
+            await sleep(delay, signal);
           }
         }
       }
@@ -340,6 +379,9 @@ export function makeGeminiLlm(
       fallbackModelName &&
       fallbackModelName.trim().length > 0
     ) {
+      if (signal?.aborted) {
+        throw lastError;
+      }
       const remainingForFallback = getRemainingBudget();
       if (remainingForFallback <= 0) {
         throw lastError;
@@ -360,7 +402,7 @@ export function makeGeminiLlm(
           const result = await fallbackModel.generateContent(sanitizedPrompt);
           const response = await result.response;
           return response.text();
-        }, effectiveFallbackTimeout);
+        }, effectiveFallbackTimeout, signal);
 
         return {
           text,

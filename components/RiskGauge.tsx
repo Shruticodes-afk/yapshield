@@ -17,6 +17,8 @@ export interface RiskGaugeProps {
   label?: string;
   /** Whether to show the severity label in the middle, default true */
   showLabel?: boolean;
+  /** Position of severity text label: 'inside' (default) or 'below' the ring */
+  labelPosition?: 'inside' | 'below';
 }
 
 export function getRiskSeverity(score: number): {
@@ -45,6 +47,7 @@ export default function RiskGauge({
   className = '',
   label,
   showLabel = true,
+  labelPosition = 'inside',
 }: RiskGaugeProps) {
   const numericScore = typeof score === 'number' && !Number.isNaN(score) ? score : 0;
   const clampedScore = Math.max(0, Math.min(100, Math.round(numericScore)));
@@ -81,7 +84,7 @@ export default function RiskGauge({
   return (
     <div
       className={`relative inline-flex flex-col items-center justify-center select-none ${className}`}
-      style={{ width: size, height: size }}
+      style={labelPosition === 'below' ? { width: size } : { width: size, height: size }}
       role="img"
       aria-label={`Risk score ${clampedScore} out of 100, ${displayLabel}`}
     >
@@ -141,7 +144,7 @@ export default function RiskGauge({
         {/* Central Display: Score Number */}
         <text
           x={center}
-          y={showLabel ? center - size * 0.04 : center}
+          y={showLabel && labelPosition === 'inside' ? center - size * 0.04 : center}
           textAnchor="middle"
           dominantBaseline="central"
           style={{
@@ -154,8 +157,8 @@ export default function RiskGauge({
           {clampedScore}
         </text>
 
-        {/* Central Display: Severity Text Label */}
-        {showLabel && (
+        {/* Central Display: Severity Text Label (when inside) */}
+        {showLabel && labelPosition === 'inside' && (
           <text
             x={center}
             y={center + size * 0.2}
@@ -173,6 +176,19 @@ export default function RiskGauge({
           </text>
         )}
       </svg>
+
+      {/* External Severity Text Label (when below) */}
+      {showLabel && labelPosition === 'below' && (
+        <span
+          className="mt-1 font-sans font-semibold tracking-wider uppercase select-none leading-none"
+          style={{
+            color: severity.color,
+            fontSize: `${Math.max(10, Math.round(size * 0.11))}px`,
+          }}
+        >
+          {displayLabel.toUpperCase()}
+        </span>
+      )}
     </div>
   );
 }

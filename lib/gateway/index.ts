@@ -30,11 +30,13 @@ import {
   isPotentiallySensitive,
   SensitiveLogContext,
 } from './logger';
+import { classifyGatewayError } from './errors';
 
 export * from './types';
 export * from './gemini';
 export * from './logger';
 export * from './rateLimit';
+export * from './errors';
 
 function round(val: number): number {
   return Math.round(val * 100) / 100;
@@ -504,12 +506,50 @@ export async function runGateway(
     const { sanitized, tokenMap } = policyResult;
     sanitizedPrompt = sanitized;
 
+    // Hard time cap: enforce an overall deadline of 25 seconds for a send request
+    // using AbortController across all Gemini attempts and fallback
+    const abortController = new AbortController();
+    const deadlineTimer = setTimeout(() => {
+      const timeoutErr = new Error(
+        'Request timed out: overall deadline of 25 seconds exceeded'
+      );
+      timeoutErr.name = 'TimeoutError';
+      abortController.abort(timeoutErr);
+    }, 25000);
+
     let completed = false;
     try {
       // Call LLM with sanitized prompt
       stage = 'llm';
       const tLlmStart = performance.now();
-      const llmResult = await deps.llm(sanitized);
+
+      const llmCallPromise = deps.llm(sanitized, {
+        signal: abortController.signal,
+      });
+
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (abortController.signal.aborted) {
+          const timeoutErr = new Error(
+            'Request timed out: overall deadline of 25 seconds exceeded'
+          );
+          timeoutErr.name = 'TimeoutError';
+          reject(timeoutErr);
+          return;
+        }
+        abortController.signal.addEventListener(
+          'abort',
+          () => {
+            const timeoutErr = new Error(
+              'Request timed out: overall deadline of 25 seconds exceeded'
+            );
+            timeoutErr.name = 'TimeoutError';
+            reject(timeoutErr);
+          },
+          { once: true }
+        );
+      });
+
+      const llmResult = await Promise.race([llmCallPromise, abortPromise]);
       tLlm = performance.now() - tLlmStart;
 
       let modelResponse: string;
@@ -655,6 +695,7 @@ export async function runGateway(
         attempts: attemptCount,
       };
     } finally {
+      clearTimeout(deadlineTimer);
       if (!completed && hasTokenize) {
         try {
           await deps.vaultStore.remove(requestId);
@@ -669,9 +710,15 @@ export async function runGateway(
       prompt: input?.prompt,
       sanitized: sanitizedPrompt,
     });
+
+    const errorInfo = classifyGatewayError(error, stage);
+    console.error('[gateway]', stage, errorInfo.code);
+
     return {
       status: 'error',
-      message: 'Request blocked for safety',
+      code: errorInfo.code,
+      reason: errorInfo.reason,
+      message: errorInfo.message,
       timings: buildTimingsObject({
         validate: tValidate,
         detect: tDetect,
