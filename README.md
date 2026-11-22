@@ -216,8 +216,8 @@ Populate the following variables in `.env.local` (**never commit this file or ex
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase anonymous/public key.
 - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service-role administrative key (server-only).
 - `GEMINI_API_KEY`: Your Google Gemini API key.
-- `GEMINI_MODEL`: (Optional) Primary Gemini model (defaults to `gemini-3.8-flash`).
-- `GEMINI_FALLBACK_MODEL`: (Optional) Fallback Gemini model for failover.
+- `GEMINI_MODEL`: (Optional) Primary Gemini model (defaults to `gemini-3.5-flash-lite`).
+- `GEMINI_FALLBACK_MODEL`: (Optional) Fallback Gemini model for failover (defaults to `gemini-flash-lite-latest`).
 - `GEMINI_MAX_RETRIES`: (Optional) Maximum retry attempts on temporary errors (defaults to `2`).
 - `GEMINI_TIMEOUT_MS`: (Optional) Per-attempt timeout in milliseconds (defaults to `15000`).
 - `VAULT_SECRET`: 32-byte hexadecimal encryption key (64 hex characters).

@@ -206,9 +206,11 @@ export function makeGeminiLlm(
   }
 
   const modelName =
-    options?.model || process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+    options?.model || process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   const fallbackModelName =
-    options?.fallbackModel || process.env.GEMINI_FALLBACK_MODEL;
+    options?.fallbackModel ||
+    process.env.GEMINI_FALLBACK_MODEL ||
+    'gemini-flash-lite-latest';
 
   const envRetries = process.env.GEMINI_MAX_RETRIES
     ? parseInt(process.env.GEMINI_MAX_RETRIES, 10)

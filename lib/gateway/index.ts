@@ -555,17 +555,17 @@ export async function runGateway(
       let modelResponse: string;
       if (typeof llmResult === 'string') {
         modelResponse = llmResult;
-        answeredModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        answeredModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
         attemptCount = 1;
       } else if (typeof llmResult === 'object' && llmResult !== null) {
         modelResponse = llmResult.text;
         answeredModel =
-          llmResult.model || process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+          llmResult.model || process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
         attemptCount =
           typeof llmResult.attempts === 'number' ? llmResult.attempts : 1;
       } else {
         modelResponse = String(llmResult);
-        answeredModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        answeredModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
         attemptCount = 1;
       }
 
