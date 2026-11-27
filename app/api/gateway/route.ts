@@ -86,11 +86,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1. Abuse Protection: Rate Limiting per Client IP (x-forwarded-for header)
+    // 1. Abuse Protection: Rate Limiting per Client IP (x-forwarded-for header, first value, validated)
     // Allows at most 10 send requests and 30 preview requests per 10 minutes.
-    // NOTE: This in-memory rate limiter tracks requests per serverless instance.
-    // For strict rate limits across multiple concurrent serverless instances,
-    // a shared store (for example Supabase or Upstash Redis) is required.
+    // An in-memory map is fine, with a comment that a shared store (for example
+    // Supabase or Upstash) is needed for strict limits on multiple serverless
+    // instances; clean up old entries so the map cannot grow without limit.
     const clientIp = getClientIp(request);
     const mode = body.mode === 'preview' ? 'preview' : 'send';
     const rateLimit = checkRateLimit(clientIp, mode);

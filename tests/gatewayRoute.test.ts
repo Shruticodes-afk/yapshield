@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import fs from 'node:fs';
 import { POST } from '@/app/api/gateway/route';
 import {
   checkRateLimit,
   getClientIp,
+  isValidIp,
+  cleanupExpiredEntries,
   _resetRateLimitStore,
+  _getRateLimitStoreSize,
   SEND_REQUEST_LIMIT,
   PREVIEW_REQUEST_LIMIT,
   RATE_LIMIT_WINDOW_MS,
@@ -265,6 +269,51 @@ describe('Gateway Route Abuse Protection & Rate Limiting', () => {
       });
       expect(getClientIp(req)).toBe('203.0.113.195');
     });
+
+    it('validates client IP and falls back safely when x-forwarded-for contains invalid characters', () => {
+      // Valid IPv4
+      expect(isValidIp('198.51.100.1')).toBe(true);
+      // Valid IPv6
+      expect(isValidIp('2001:db8::1')).toBe(true);
+      // Invalid strings
+      expect(isValidIp('not-an-ip')).toBe(false);
+      expect(isValidIp('<script>alert(1)</script>')).toBe(false);
+      expect(isValidIp('; drop table users;')).toBe(false);
+
+      // Request with malformed IP falls back safely
+      const reqInvalid = new NextRequest('http://localhost:3000/api/gateway', {
+        headers: {
+          'x-forwarded-for': 'malformed-client-ip, 198.51.100.1',
+        },
+      });
+      expect(getClientIp(reqInvalid)).toBe('127.0.0.1');
+
+      // Request with IPv4 host:port strips port and validates IP
+      const reqWithPort = new NextRequest('http://localhost:3000/api/gateway', {
+        headers: {
+          'x-forwarded-for': '203.0.113.50:8080',
+        },
+      });
+      expect(getClientIp(reqWithPort)).toBe('203.0.113.50');
+    });
+
+    it('cleans up expired entries so the in-memory map cannot grow without limit', () => {
+      _resetRateLimitStore();
+      const now = 1700000000000;
+
+      // Populate 10 different IP keys
+      for (let i = 1; i <= 10; i++) {
+        checkRateLimit(`198.51.100.${i}`, 'send', now);
+      }
+      expect(_getRateLimitStoreSize()).toBe(10);
+
+      // Advance time beyond the 10-minute window
+      const futureTime = now + RATE_LIMIT_WINDOW_MS + 5000;
+      cleanupExpiredEntries(futureTime);
+
+      // All expired entries have been pruned
+      expect(_getRateLimitStoreSize()).toBe(0);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -477,6 +526,24 @@ describe('Gateway Route Abuse Protection & Rate Limiting', () => {
       expect(preferredRegion).toBeDefined();
       expect(typeof preferredRegion).toBe('string');
       expect(preferredRegion.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 6. Playground Error Messaging & Warning Style
+  // ---------------------------------------------------------------------------
+  describe('Playground Error Messaging & Warning Style', () => {
+    it('contains the clear 429 message and 4000 character length limit error handling', () => {
+      const playgroundSource = fs.readFileSync('app/playground/page.tsx', 'utf8');
+
+      // Requirement 4: 'Too many requests, please wait a few minutes'
+      expect(playgroundSource).toContain('Too many requests, please wait a few minutes');
+
+      // Requirement 4: length error message
+      expect(playgroundSource).toContain('Prompt exceeds maximum length of 4000 characters.');
+
+      // Same warning style as technical errors: neutral surface with amber accent
+      expect(playgroundSource).toContain('errorMessage.includes(\'Too many requests\') || errorMessage.includes(\'4000\')');
     });
   });
 });

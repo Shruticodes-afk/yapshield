@@ -465,9 +465,29 @@ const InputConsole = React.memo(function InputConsole({
           {errorMessage && (
             <div
               role="alert"
-              className="p-3 rounded bg-red-500/10 border border-red-500/40 text-red-600 dark:text-red-300 text-xs"
+              className={
+                errorMessage.includes('Too many requests') || errorMessage.includes('4000')
+                  ? 'p-3 rounded bg-[var(--surface-2)] border border-[var(--border)] text-[var(--text)] text-xs flex items-center gap-2 shadow-xs'
+                  : 'p-3 rounded bg-red-500/10 border border-red-500/40 text-red-600 dark:text-red-300 text-xs'
+              }
             >
-              {errorMessage}
+              {(errorMessage.includes('Too many requests') || errorMessage.includes('4000')) && (
+                <svg
+                  className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              )}
+              <span>{errorMessage}</span>
             </div>
           )}
         </div>
@@ -737,9 +757,8 @@ export default function PlaygroundPage() {
       if (response.status === 429) {
         setSendError({
           isBlocked: false,
-          code: 'llm_busy',
-          message:
-            'The AI service is busy right now. Your prompt was not sent. Please try again in a minute.',
+          code: 'rate_limit',
+          message: 'Too many requests, please wait a few minutes',
         });
         return;
       }
@@ -1343,7 +1362,13 @@ export default function PlaygroundPage() {
                             <line x1="12" y1="9" x2="12" y2="13" />
                             <line x1="12" y1="17" x2="12.01" y2="17" />
                           </svg>
-                          <span>Could not reach the AI</span>
+                          <span>
+                            {sendError.message.includes('Too many requests')
+                              ? 'Too many requests'
+                              : sendError.message.includes('4000')
+                              ? 'Prompt too long'
+                              : 'Could not reach the AI'}
+                          </span>
                         </div>
                         <button
                           type="button"

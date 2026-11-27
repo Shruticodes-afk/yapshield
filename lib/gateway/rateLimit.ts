@@ -6,13 +6,12 @@
  * - preview: max 30 requests per 10 minutes per client IP
  *
  * NOTE ON MULTI-INSTANCE SERVERLESS DEPLOYMENTS:
- * This in-memory map is scoped to the current Node.js process instance.
- * In a distributed, multi-instance serverless environment (such as Vercel or AWS Lambda),
- * each serverless instance maintains its own isolated memory state.
- * For strict, globally synchronized rate limits across multiple concurrent serverless
- * instances, a shared store (for example Supabase or Upstash Redis) is required.
+ * An in-memory map is fine, but a shared store (for example Supabase or Upstash)
+ * is needed for strict limits on multiple serverless instances; clean up old
+ * entries so the map cannot grow without limit.
  */
 
+import net from 'node:net';
 import { NextRequest } from 'next/server';
 
 export const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes (600,000 ms)
@@ -24,39 +23,67 @@ export type RateLimitMode = 'send' | 'preview' | 'public-stats';
 
 // Internal map storing request timestamps per `${clientIp}:${mode}`
 const rateLimitStore = new Map<string, number[]>();
+let lastCleanupTime = 0;
+
+/**
+ * Validates whether a candidate string is a well-formed IPv4 or IPv6 address.
+ */
+export function isValidIp(ip: string): boolean {
+  return typeof ip === 'string' && net.isIP(ip) !== 0;
+}
 
 /**
  * Extracts client IP prioritizing the x-forwarded-for header.
- * If comma-separated, takes the first (originating client) IP address.
+ * If comma-separated, takes the first (originating client) IP address and validates it.
  */
 export function getClientIp(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {
-    const first = forwarded.split(',')[0]?.trim();
+    let first = forwarded.split(',')[0]?.trim();
     if (first) {
-      // Strip port if formatted as IPv4 host:port
+      // Strip port if formatted as IPv4 host:port (e.g. 192.0.2.1:8080)
       if (
         first.includes(':') &&
         !first.includes('::') &&
         first.split(':').length === 2
       ) {
-        return first.split(':')[0].trim();
+        first = first.split(':')[0].trim();
       }
-      return first;
+      if (isValidIp(first)) {
+        return first;
+      }
     }
   }
 
   const realIp = request.headers.get('x-real-ip');
-  if (realIp && realIp.trim()) {
+  if (realIp && isValidIp(realIp.trim())) {
     return realIp.trim();
   }
 
-  return request.ip || '127.0.0.1';
+  if (request.ip && isValidIp(request.ip)) {
+    return request.ip;
+  }
+
+  return '127.0.0.1';
 }
 
 export interface RateLimitResult {
   allowed: boolean;
   retryAfter: number;
+}
+
+/**
+ * Prunes expired timestamps and deletes empty keys so the in-memory map cannot grow without limit.
+ */
+export function cleanupExpiredEntries(now: number = Date.now()): void {
+  rateLimitStore.forEach((timestamps, key) => {
+    const valid = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    if (valid.length === 0) {
+      rateLimitStore.delete(key);
+    } else {
+      rateLimitStore.set(key, valid);
+    }
+  });
 }
 
 /**
@@ -80,6 +107,12 @@ export function checkRateLimit(
   }
   const key = `${ip}:${mode}`;
 
+  // Clean up old entries periodically so the map cannot grow without limit
+  if (now - lastCleanupTime > 60000 || rateLimitStore.size > 200) {
+    lastCleanupTime = now;
+    cleanupExpiredEntries(now);
+  }
+
   const currentTimestamps = rateLimitStore.get(key) || [];
   // Retain only timestamps within the active sliding window
   const activeTimestamps = currentTimestamps.filter(
@@ -99,19 +132,14 @@ export function checkRateLimit(
   activeTimestamps.push(now);
   rateLimitStore.set(key, activeTimestamps);
 
-  // Periodic cleanup if store exceeds 1000 keys
-  if (rateLimitStore.size > 1000) {
-    rateLimitStore.forEach((timestamps, k) => {
-      const valid = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-      if (valid.length === 0) {
-        rateLimitStore.delete(k);
-      } else {
-        rateLimitStore.set(k, valid);
-      }
-    });
-  }
-
   return { allowed: true, retryAfter: 0 };
+}
+
+/**
+ * Returns the current count of keys in the rate limit store. Useful for testing cleanup.
+ */
+export function _getRateLimitStoreSize(): number {
+  return rateLimitStore.size;
 }
 
 /**
@@ -119,4 +147,5 @@ export function checkRateLimit(
  */
 export function _resetRateLimitStore(): void {
   rateLimitStore.clear();
+  lastCleanupTime = 0;
 }
